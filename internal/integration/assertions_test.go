@@ -54,7 +54,7 @@ func assertMachineConfiguration(ctx context.Context, t *testing.T, c client.Clie
 	provider, err := configloader.NewFromBytes(bootstrapDataSecret.Data["value"])
 	require.NoError(t, err)
 
-	_, err = provider.Validate(runtimeMode{false}, validation.WithStrict())
+	_, err = provider.ValidateAsClient(runtimeMode{false}, validation.WithStrict())
 	assert.NoError(t, err)
 
 	return provider
@@ -76,8 +76,8 @@ func assertClusterCA(ctx context.Context, t *testing.T, c client.Client, cluster
 	assert.NotEmpty(t, caSecret.Data[corev1.TLSCertKey])
 	assert.NotEmpty(t, caSecret.Data[corev1.TLSPrivateKeyKey])
 
-	assert.Equal(t, provider.Cluster().IssuingCA().Crt, caSecret.Data[corev1.TLSCertKey])
-	assert.Equal(t, provider.Cluster().IssuingCA().Key, caSecret.Data[corev1.TLSPrivateKeyKey])
+	assert.Equal(t, provider.K8sAPIServerCAConfig().IssuingCA().Crt, caSecret.Data[corev1.TLSCertKey])
+	assert.Equal(t, provider.K8sAPIServerCAConfig().IssuingCA().Key, caSecret.Data[corev1.TLSPrivateKeyKey])
 }
 
 // assertControllerSecret checks that persisted controller secret (used to bootstrap more machines with same secrets) maches generated controlplane config.
@@ -93,7 +93,7 @@ func assertControllerSecret(ctx context.Context, t *testing.T, c client.Client, 
 	assert.NotEmpty(t, talosSecret.Data["bundle"])
 
 	// cross-checks
-	secretsBundle := secrets.NewBundleFromConfig(secrets.NewFixedClock(time.Now()), provider)
+	secretsBundle := bundleFromConfig(t, secrets.NewFixedClock(time.Now()), provider)
 	secretsBundle.Clock = nil
 
 	var savedBundle secrets.Bundle
@@ -111,10 +111,10 @@ func assertSameMachineConfigSecrets(ctx context.Context, t *testing.T, c client.
 
 	clock := secrets.NewFixedClock(time.Now())
 
-	secretsBundle0 := secrets.NewBundleFromConfig(clock, providers[0])
+	secretsBundle0 := bundleFromConfig(t, clock, providers[0])
 
 	for _, provider := range providers[1:] {
-		assert.Equal(t, secretsBundle0, secrets.NewBundleFromConfig(clock, provider))
+		assert.Equal(t, secretsBundle0, bundleFromConfig(t, clock, provider))
 	}
 }
 
@@ -129,12 +129,12 @@ func assertCompatibleMachineConfigs(ctx context.Context, t *testing.T, c client.
 	checks := []func(p machineconfig.Provider) any{
 		func(p machineconfig.Provider) any { return p.Machine().Security().Token() },
 		func(p machineconfig.Provider) any { return p.Machine().Security().IssuingCA().Crt },
-		func(p machineconfig.Provider) any { return p.Cluster().ID() },
-		func(p machineconfig.Provider) any { return p.Cluster().Secret() },
-		func(p machineconfig.Provider) any { return p.Cluster().Endpoint().String() },
+		func(p machineconfig.Provider) any { return p.DiscoveryIdentityConfig().ClusterID() },
+		func(p machineconfig.Provider) any { return p.DiscoveryIdentityConfig().ClusterSecret() },
+		func(p machineconfig.Provider) any { return p.K8sClusterConfig().ClusterEndpoint().String() },
 		func(p machineconfig.Provider) any { return p.Cluster().Token().ID() },
 		func(p machineconfig.Provider) any { return p.Cluster().Token().Secret() },
-		func(p machineconfig.Provider) any { return p.Cluster().IssuingCA().Crt },
+		func(p machineconfig.Provider) any { return p.K8sAPIServerCAConfig().IssuingCA().Crt },
 	}
 
 	for _, check := range checks {
@@ -144,4 +144,14 @@ func assertCompatibleMachineConfigs(ctx context.Context, t *testing.T, c client.
 			assert.Equal(t, value0, check(provider))
 		}
 	}
+}
+
+// bundleFromConfig extracts the secrets bundle a machine configuration was generated from.
+func bundleFromConfig(t *testing.T, clock secrets.Clock, provider machineconfig.Provider) *secrets.Bundle {
+	t.Helper()
+
+	bundle, err := secrets.NewBundleFromConfig(clock, provider)
+	require.NoError(t, err)
+
+	return bundle
 }

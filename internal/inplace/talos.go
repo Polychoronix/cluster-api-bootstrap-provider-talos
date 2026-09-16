@@ -111,7 +111,11 @@ func (t *talosNodeClient) ApplyConfig(ctx context.Context, data []byte) error {
 }
 
 func (t *talosNodeClient) Upgrade(ctx context.Context, image string) error {
-	_, err := t.client.Upgrade(ctx, image, false, false)
+	// Talos 1.14 deprecates this call in favour of the lifecycle service, whose upgrade is a
+	// client-driven sequence (pull the image, stream the install, then reboot) that nodes
+	// before 1.13 do not serve. Moving to it changes how the hook tracks an upgrade, so the
+	// machine service call stays until that is designed; Talos 1.14 still honours it.
+	_, err := t.client.Upgrade(ctx, image, false, false) //nolint:staticcheck // see above
 	if err != nil {
 		return fmt.Errorf("failed to upgrade Talos to %q: %w", image, err)
 	}

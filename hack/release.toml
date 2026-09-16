@@ -6,9 +6,9 @@ github_repo = "siderolabs/cluster-api-bootstrap-provider-talos"
 match_deps = "^github.com/(siderolabs/[a-zA-Z0-9-]+)$"
 
 # previous release
-previous = "v0.6.11"
+previous = "v0.8.1"
 
-pre_release = true
+pre_release = false
 
 [notes]
 
@@ -19,9 +19,11 @@ CABPT is now compatible with CAPI v1.12.0+ (v1beta2).
 """
 
 [notes.Talos]
-    title = "Talos 1.13"
+    title = "Talos 1.14"
     description = """\
-CABPT is now compatible with Talos v1.13.0+.
+CABPT is now compatible with Talos v1.14.0+. Configurations without a `talosVersion` are
+generated for Talos 1.14 and use the multi-document Kubernetes, discovery and identity
+configuration; pin `talosVersion` on configs that target older nodes.
 """
 
 preface = """\
