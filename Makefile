@@ -12,12 +12,12 @@ TEST_RUN ?= ./...
 TOOLS ?= ghcr.io/siderolabs/tools:v1.14.0
 PKGS ?= v1.14.0
 TALOS_VERSION ?= v1.14.0
-K8S_VERSION ?= 1.36.0
+K8S_VERSION ?= 1.37.0
 
 KRES_IMAGE ?= ghcr.io/siderolabs/kres:latest
 
-CONTROLLER_GEN_VERSION ?= v0.19.0
-CONVERSION_GEN_VERSION ?= v0.34.0
+CONTROLLER_GEN_VERSION ?= v0.21.0
+CONVERSION_GEN_VERSION ?= v0.36.0
 
 BUILD := docker buildx build
 PLATFORM ?= linux/amd64

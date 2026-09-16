@@ -18,9 +18,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/configowner"
 )
 
 const bootstrapSecretName = "machine-1-bootstrap-data"
@@ -66,17 +66,17 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 	owned.SetAPIVersion(capiv1.GroupVersion.String())
 	owned.SetKind("Machine")
 
-	owner := &bsutil.ConfigOwner{Unstructured: owned}
+	owner := &configowner.ConfigOwner{Unstructured: owned}
 
 	return &TalosConfigReconciler{
-			Client: builder.Build(),
-			Log:    ctrl.Log.WithName("test"),
-			Scheme: scheme,
-		}, &TalosConfigScope{
-			Config:      config,
-			ConfigOwner: owner,
-			Cluster:     &capiv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}},
-		}
+		Client: builder.Build(),
+		Log:    ctrl.Log.WithName("test"),
+		Scheme: scheme,
+	}, &TalosConfigScope{
+		Config:      config,
+		ConfigOwner: owner,
+		Cluster:     &capiv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}},
+	}
 }
 
 func existingSecret(data, hash string) *corev1.Secret {
