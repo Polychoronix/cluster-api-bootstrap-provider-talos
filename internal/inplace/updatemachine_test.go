@@ -6,8 +6,11 @@ package inplace
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,8 +53,11 @@ cluster:
 `, image)
 }
 
-// fakeNode records what the update state machine did to a node.
+// fakeNode records what the update state machine did to a node. The tracker drives Upgrade
+// from a goroutine, so the fields it touches are guarded.
 type fakeNode struct {
+	mu sync.Mutex
+
 	version string
 
 	applied        [][]byte
@@ -62,7 +68,27 @@ type fakeNode struct {
 	upgradeErr error
 }
 
-func (f *fakeNode) Version(context.Context) (string, error) { return f.version, f.versionErr }
+func (f *fakeNode) Version(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.version, f.versionErr
+}
+
+func (f *fakeNode) setVersion(version string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.version = version
+}
+
+// upgradesSeen returns a copy of the lifecycle upgrades requested so far.
+func (f *fakeNode) upgradesSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]string(nil), f.upgrades...)
+}
 
 func (f *fakeNode) ApplyConfig(_ context.Context, data []byte) error {
 	f.applied = append(f.applied, data)
@@ -71,6 +97,9 @@ func (f *fakeNode) ApplyConfig(_ context.Context, data []byte) error {
 }
 
 func (f *fakeNode) Upgrade(_ context.Context, image string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.upgrades = append(f.upgrades, image)
 
 	return f.upgradeErr
@@ -212,7 +241,7 @@ func TestUpdateMachine_AppliesConfigWhenFresh(t *testing.T) {
 	assert.Zero(t, resp.RetryAfterSeconds, "config-only change should complete")
 }
 
-func TestUpdateMachine_UpgradesWhenInstallerImageDiffers(t *testing.T) {
+func TestUpdateMachine_UsesTheMachineServiceUpgradeOnNodesBefore113(t *testing.T) {
 	t.Parallel()
 
 	f := newUpdateFixture(t, "v1.12.3", "ghcr.io/siderolabs/installer:v1.13.0", freshHash(t), "")
@@ -222,9 +251,71 @@ func TestUpdateMachine_UpgradesWhenInstallerImageDiffers(t *testing.T) {
 
 	require.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
 	assert.Len(t, f.node.applied, 1, "config is applied before the upgrade so the new image is recorded")
-	require.Len(t, f.node.upgrades, 1)
-	assert.Equal(t, "ghcr.io/siderolabs/installer:v1.13.0", f.node.upgrades[0])
+	assert.Equal(t, []string{"ghcr.io/siderolabs/installer:v1.13.0"}, f.node.legacyUpgrades)
+	assert.Empty(t, f.node.upgrades, "a pre-1.13 node has no lifecycle service")
 	assert.Positive(t, resp.RetryAfterSeconds, "must keep polling while the node reboots")
+}
+
+func TestUpdateMachine_StartsOneLifecycleUpgradeAndKeepsPolling(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, "v1.13.0", "factory.talos.dev/metal-installer/abc:v1.14.0", freshHash(t), "")
+
+	resp := &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+
+	require.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
+	assert.Positive(t, resp.RetryAfterSeconds)
+	assert.Contains(t, resp.Message, "factory.talos.dev/metal-installer/abc:v1.14.0")
+
+	require.Eventually(t, func() bool { return len(f.node.upgradesSeen()) == 1 }, time.Second, 10*time.Millisecond, "the sequence runs in the background")
+
+	// The node still reports the old version: the sequence is finished, the reboot pending.
+	resp = &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+
+	require.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
+	assert.Positive(t, resp.RetryAfterSeconds)
+	assert.Len(t, f.node.upgradesSeen(), 1, "a finished sequence is not started again while the node reboots")
+	assert.Empty(t, f.node.legacyUpgrades)
+
+	// Back on the new version: the update completes and the sequence is forgotten.
+	f.node.setVersion("v1.14.0")
+	resp = &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+
+	require.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
+	assert.Zero(t, resp.RetryAfterSeconds)
+	_, tracked := f.handler.upgrades.get(types.NamespacedName{Namespace: "default", Name: "machine-1"})
+	assert.False(t, tracked)
+}
+
+func TestUpdateMachine_ReportsAFailedLifecycleUpgradeOnceThenRetries(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, "v1.13.0", "factory.talos.dev/metal-installer/abc:v1.14.0", freshHash(t), "")
+	f.node.upgradeErr = errors.New("the upgrade exited with code 1: bad image")
+
+	resp := &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+	require.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
+
+	require.Eventually(t, func() bool {
+		current, ok := f.handler.upgrades.get(types.NamespacedName{Namespace: "default", Name: "machine-1"})
+
+		return ok && current.done
+	}, time.Second, 10*time.Millisecond)
+
+	resp = &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+	assert.Equal(t, runtimehooksv1.ResponseStatusFailure, resp.Status)
+	assert.Contains(t, resp.Message, "failed to upgrade Talos")
+
+	// The failure was surfaced once; the next call starts the sequence over.
+	resp = &runtimehooksv1.UpdateMachineResponse{}
+	f.handler.DoUpdateMachine(context.Background(), f.request, resp)
+	assert.Equal(t, runtimehooksv1.ResponseStatusSuccess, resp.Status, resp.Message)
+	require.Eventually(t, func() bool { return len(f.node.upgradesSeen()) == 2 }, time.Second, 10*time.Millisecond)
 }
 
 func TestImageTag(t *testing.T) {

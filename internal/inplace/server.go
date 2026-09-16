@@ -27,6 +27,7 @@ type runtimeRawExtension = runtime.RawExtension
 type Handler struct {
 	client        client.Client
 	newNodeClient NodeClientFactory
+	upgrades      *upgradeTracker
 }
 
 // NewHandler builds a Handler backed by the management cluster client c, opening Talos
@@ -36,6 +37,7 @@ func NewHandler(c client.Client, factory NodeClientFactory) *Handler {
 	return &Handler{
 		client:        c,
 		newNodeClient: factory,
+		upgrades:      newUpgradeTracker(),
 	}
 }
 

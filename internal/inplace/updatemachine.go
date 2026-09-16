@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -124,26 +126,103 @@ func (h *Handler) DoUpdateMachine(ctx context.Context, req *runtimehooksv1.Updat
 		return
 	}
 
+	machineKey := types.NamespacedName{Namespace: machine.Namespace, Name: machine.Name}
+
 	if needsUpgrade(desiredImage, runningVersion) {
-		log.Info("upgrading Talos in place", "image", desiredImage, "running", runningVersion)
-
-		if err := node.Upgrade(ctx, desiredImage); err != nil {
-			respondRetryFailure(&resp.CommonRetryResponse, "failed to upgrade Talos", err, log)
-
-			return
-		}
-
-		resp.Status = runtimehooksv1.ResponseStatusSuccess
-		resp.Message = fmt.Sprintf("upgrading Talos to %s", desiredImage)
-		resp.RetryAfterSeconds = waitForRebootSeconds
+		h.continueUpgrade(ctx, log, resp, node, upgradeTarget{
+			machine:   machineKey,
+			cluster:   clusterKey,
+			endpoints: endpoints,
+			image:     desiredImage,
+			running:   runningVersion,
+		})
 
 		return
 	}
+
+	// The node runs the desired version, so any sequence recorded for it is over.
+	h.upgrades.forget(machineKey)
 
 	log.Info("in-place update applied")
 
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	resp.RetryAfterSeconds = 0
+}
+
+// upgradeTarget is what continueUpgrade needs to know about the machine being upgraded.
+type upgradeTarget struct {
+	machine   types.NamespacedName
+	cluster   types.NamespacedName
+	endpoints []string
+	image     string
+	running   string
+}
+
+// continueUpgrade moves a Talos upgrade along by one hook call.
+//
+// Nodes before Talos 1.13 upgrade themselves through the machine service and need nothing more
+// than the request. Newer nodes are driven through the lifecycle service, whose sequence takes
+// minutes; it runs in the background under the tracker, and each call reports on it: started,
+// still running, failed (once, then the sequence is retried from scratch) or finished and
+// waiting for the node to come back on the new version.
+func (h *Handler) continueUpgrade(ctx context.Context, log logr.Logger, resp *runtimehooksv1.UpdateMachineResponse, node NodeClient, target upgradeTarget) {
+	if !lifecycleUpgradeSupported(target.running) {
+		log.Info("upgrading Talos in place through the machine service", "image", target.image, "running", target.running)
+
+		if err := node.LegacyUpgrade(ctx, target.image); err != nil {
+			respondRetryFailure(&resp.CommonRetryResponse, "failed to upgrade Talos", err, log)
+
+			return
+		}
+
+		respondRetry(resp, fmt.Sprintf("upgrading Talos to %s", target.image))
+
+		return
+	}
+
+	current, tracked := h.upgrades.get(target.machine)
+
+	switch {
+	case !tracked:
+		log.Info("starting a lifecycle upgrade", "image", target.image, "running", target.running)
+
+		h.upgrades.start(target.machine, target.image, func() error {
+			upgradeCtx, cancel := context.WithTimeout(context.Background(), upgradeTimeout)
+			defer cancel()
+
+			// The request-scoped client is closed when this hook call returns; the sequence
+			// outlives it and needs a connection of its own.
+			background, err := h.newNodeClient(upgradeCtx, target.cluster, target.endpoints)
+			if err != nil {
+				return fmt.Errorf("failed to connect for the upgrade: %w", err)
+			}
+
+			defer background.Close() //nolint:errcheck // best effort
+
+			return background.Upgrade(upgradeCtx, target.image)
+		})
+
+		respondRetry(resp, fmt.Sprintf("upgrading Talos to %s", target.image))
+	case current.err != nil:
+		h.upgrades.forget(target.machine)
+		respondRetryFailure(&resp.CommonRetryResponse, "failed to upgrade Talos", current.err, log)
+	case current.done && time.Since(current.started) > upgradeTimeout:
+		// The install finished long ago and the node never came back on the new version.
+		log.Info("the node did not come back on the new version, restarting the upgrade", "image", target.image)
+		h.upgrades.forget(target.machine)
+		respondRetry(resp, fmt.Sprintf("restarting the upgrade to %s", target.image))
+	case current.done:
+		respondRetry(resp, fmt.Sprintf("waiting for the node to reboot into %s", target.image))
+	default:
+		respondRetry(resp, fmt.Sprintf("upgrading Talos to %s", target.image))
+	}
+}
+
+// respondRetry asks Cluster API to call again after the reboot wait.
+func respondRetry(resp *runtimehooksv1.UpdateMachineResponse, message string) {
+	resp.Status = runtimehooksv1.ResponseStatusSuccess
+	resp.Message = message
+	resp.RetryAfterSeconds = waitForRebootSeconds
 }
 
 // desiredConfig fetches the rendered machine configuration for the desired spec.
