@@ -310,3 +310,50 @@ func TestUpdateMachine_WaitsWhenTheSecretPredatesTheImage(t *testing.T) {
 	assert.Positive(t, resp.RetryAfterSeconds, "must wait for CABPT to re-render with the image")
 	assert.Empty(t, f.node.applied)
 }
+
+// machineConfigWithDocument renders a configuration whose installer image lives only in an
+// UnattendedInstallConfig document, the 1.14 shape.
+func machineConfigWithDocument(image string) string {
+	return fmt.Sprintf(`version: v1alpha1
+debug: false
+machine:
+  type: worker
+  token: aaaaaa.bbbbbbbbbbbbbbbb
+  ca:
+    crt: ""
+    key: ""
+cluster:
+  id: dGVzdA==
+  secret: dGVzdA==
+  controlPlane:
+    endpoint: https://192.168.1.1:6443
+  token: aaaaaa.bbbbbbbbbbbbbbbb
+  ca:
+    crt: ""
+    key: ""
+---
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  image: %s
+provisioning:
+  diskSelector:
+    match: system_disk
+`, image)
+}
+
+func TestInstallImageReadsTheUnattendedInstallDocument(t *testing.T) {
+	t.Parallel()
+
+	image, err := installImage([]byte(machineConfigWithDocument("factory.talos.dev/metal-installer/abc:v1.14.0")))
+	require.NoError(t, err)
+	assert.Equal(t, "factory.talos.dev/metal-installer/abc:v1.14.0", image)
+}
+
+func TestInstallImageReadsTheLegacyField(t *testing.T) {
+	t.Parallel()
+
+	image, err := installImage([]byte(machineConfigWithImage("ghcr.io/siderolabs/installer:v1.13.0")))
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io/siderolabs/installer:v1.13.0", image)
+}

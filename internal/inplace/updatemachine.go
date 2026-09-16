@@ -209,11 +209,17 @@ func desiredConfigHash(machine *clusterv1.Machine, bootstrapConfig runtimeRawExt
 	return bootstrapv1beta1.InPlaceConfigHash(spec, strings.TrimPrefix(machine.Spec.Version, "v"), installerImage)
 }
 
-// installImage reads machine.install.image out of a rendered Talos machine configuration.
+// installImage reads the installer image out of a rendered Talos machine configuration, with
+// the precedence Talos applies: an UnattendedInstallConfig document first, the legacy
+// machine.install.image field otherwise.
 func installImage(data []byte) (string, error) {
 	provider, err := configloader.NewFromBytes(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse machine configuration: %w", err)
+	}
+
+	if doc := provider.UnattendedInstallConfig(); doc != nil {
+		return doc.InstallerImage(), nil
 	}
 
 	if provider.Machine() == nil || provider.Machine().Install() == nil {
