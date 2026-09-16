@@ -54,10 +54,12 @@ cluster:
 type fakeNode struct {
 	version string
 
-	applied  [][]byte
-	upgrades []string
+	applied        [][]byte
+	upgrades       []string
+	legacyUpgrades []string
 
 	versionErr error
+	upgradeErr error
 }
 
 func (f *fakeNode) Version(context.Context) (string, error) { return f.version, f.versionErr }
@@ -70,6 +72,12 @@ func (f *fakeNode) ApplyConfig(_ context.Context, data []byte) error {
 
 func (f *fakeNode) Upgrade(_ context.Context, image string) error {
 	f.upgrades = append(f.upgrades, image)
+
+	return f.upgradeErr
+}
+
+func (f *fakeNode) LegacyUpgrade(_ context.Context, image string) error {
+	f.legacyUpgrades = append(f.legacyUpgrades, image)
 
 	return nil
 }

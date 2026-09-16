@@ -150,3 +150,17 @@ func TestLifecycleUpgradeStopsWhenThePullFails(t *testing.T) {
 	require.ErrorContains(t, err, "registry unreachable")
 	assert.Nil(t, lifecycle.request, "no install without the image")
 }
+
+func TestNodeClientUpgradeRunsTheLifecycleSequence(t *testing.T) {
+	t.Parallel()
+
+	machine := &fakeMachine{}
+	node := &talosNodeClient{upgrade: upgradeClients{
+		images:    &fakeImages{},
+		lifecycle: &fakeLifecycle{progress: []*machineapi.LifecycleServiceUpgradeResponse{progressExit(0)}},
+		machine:   machine,
+	}}
+
+	require.NoError(t, node.Upgrade(context.Background(), lifecycleImage))
+	assert.Len(t, machine.reboots, 1)
+}

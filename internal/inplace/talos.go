@@ -29,9 +29,14 @@ type NodeClient interface {
 	// whether the change requires a reboot.
 	ApplyConfig(ctx context.Context, data []byte) error
 
-	// Upgrade swaps the installer image, rebooting into the new version. Talos cordons and
-	// drains the node itself as part of the sequence.
+	// Upgrade drives a lifecycle upgrade to image: pull, install and reboot. It blocks for as
+	// long as the install takes and returns once the reboot has been requested. Talos cordons
+	// and drains the node itself as part of the reboot.
 	Upgrade(ctx context.Context, image string) error
+
+	// LegacyUpgrade asks a node that predates the lifecycle service (Talos before 1.13) to
+	// upgrade itself through the machine service, and returns as soon as it has been asked.
+	LegacyUpgrade(ctx context.Context, image string) error
 
 	// Close releases the underlying connection.
 	Close() error
@@ -42,7 +47,8 @@ type NodeClientFactory func(ctx context.Context, clusterKey types.NamespacedName
 
 // talosNodeClient is the gRPC-backed NodeClient.
 type talosNodeClient struct {
-	client *talosclient.Client
+	client  *talosclient.Client
+	upgrade upgradeClients
 }
 
 // NewNodeClient builds a NodeClient for a machine using the cluster's talosconfig secret,
@@ -78,7 +84,10 @@ func NewNodeClient(c client.Client) NodeClientFactory {
 			return nil, fmt.Errorf("failed to connect to Talos API: %w", err)
 		}
 
-		return &talosNodeClient{client: tc}, nil
+		return &talosNodeClient{
+			client:  tc,
+			upgrade: upgradeClients{images: tc.ImageClient, lifecycle: tc.LifecycleClient, machine: tc.MachineClient},
+		}, nil
 	}
 }
 
@@ -111,11 +120,13 @@ func (t *talosNodeClient) ApplyConfig(ctx context.Context, data []byte) error {
 }
 
 func (t *talosNodeClient) Upgrade(ctx context.Context, image string) error {
-	// Talos 1.14 deprecates this call in favour of the lifecycle service, whose upgrade is a
-	// client-driven sequence (pull the image, stream the install, then reboot) that nodes
-	// before 1.13 do not serve. Moving to it changes how the hook tracks an upgrade, so the
-	// machine service call stays until that is designed; Talos 1.14 still honours it.
-	_, err := t.client.Upgrade(ctx, image, false, false) //nolint:staticcheck // see above
+	return lifecycleUpgrade(ctx, t.upgrade, image)
+}
+
+func (t *talosNodeClient) LegacyUpgrade(ctx context.Context, image string) error {
+	// Nodes before Talos 1.13 serve only the machine service upgrade, which Talos 1.14
+	// deprecates; it is kept for them alone. The node performs the whole sequence itself.
+	_, err := t.client.Upgrade(ctx, image, false, false) //nolint:staticcheck // pre-1.13 nodes have nothing else
 	if err != nil {
 		return fmt.Errorf("failed to upgrade Talos to %q: %w", image, err)
 	}
