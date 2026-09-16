@@ -6,7 +6,6 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 const (
@@ -145,10 +144,6 @@ type TalosConfigStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// deprecated groups all the status fields that are deprecated and will be removed when all the nested field are removed.
-	// +optional
-	Deprecated *TalosConfigDeprecatedStatus `json:"deprecated,omitempty"`
 }
 
 // TalosConfigInitializationStatus provides observations of the TalosConfig initialization process.
@@ -158,37 +153,6 @@ type TalosConfigInitializationStatus struct {
 	// NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
 	// +optional
 	DataSecretCreated *bool `json:"dataSecretCreated,omitempty"`
-}
-
-// TalosConfigDeprecatedStatus groups all the status fields that are deprecated and will be removed in a future version.
-type TalosConfigDeprecatedStatus struct {
-	// v1beta1 groups all the status fields that are deprecated and will be removed when support for CAPI v1beta1 contract will be dropped.
-	// +optional
-	V1Beta1 *TalosConfigV1Beta1DeprecatedStatus `json:"v1beta,omitempty"`
-}
-
-// TalosConfigV1Beta1DeprecatedStatus groups all the status fields that are deprecated and will be removed when support for CAPI v1beta1 contract will be dropped.
-type TalosConfigV1Beta1DeprecatedStatus struct {
-	// conditions defines current service state of the TalosConfig.
-	//
-	// Deprecated: This field is deprecated and is going to be removed when support for CAPI v1beta1 contract will be dropped.
-	//
-	// +optional
-	Conditions capiv1.Conditions `json:"conditions,omitempty"`
-
-	// failureReason will be set on non-retryable errors
-	//
-	// Deprecated: This field is deprecated and is going to be removed when support for CAPI v1beta1 contract will be dropped.
-	//
-	// +optional
-	FailureReason string `json:"failureReason,omitempty"`
-
-	// failureMessage will be set on non-retryable errors
-	//
-	// Deprecated: This field is deprecated and is going to be removed when support for CAPI v1beta1 contract will be dropped.
-	//
-	// +optional
-	FailureMessage string `json:"failureMessage,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -207,25 +171,6 @@ type TalosConfig struct {
 
 	Spec   TalosConfigSpec   `json:"spec,omitempty"`
 	Status TalosConfigStatus `json:"status,omitempty"`
-}
-
-// GetV1Beta1Conditions returns the set of conditions for this object.
-func (c *TalosConfig) GetV1Beta1Conditions() capiv1.Conditions {
-	if c.Status.Deprecated == nil || c.Status.Deprecated.V1Beta1 == nil {
-		return nil
-	}
-	return c.Status.Deprecated.V1Beta1.Conditions
-}
-
-// SetV1Beta1Conditions sets the conditions on this object.
-func (c *TalosConfig) SetV1Beta1Conditions(conditions capiv1.Conditions) {
-	if c.Status.Deprecated == nil {
-		c.Status.Deprecated = &TalosConfigDeprecatedStatus{}
-	}
-	if c.Status.Deprecated.V1Beta1 == nil {
-		c.Status.Deprecated.V1Beta1 = &TalosConfigV1Beta1DeprecatedStatus{}
-	}
-	c.Status.Deprecated.V1Beta1.Conditions = conditions
 }
 
 // GetConditions returns the set of conditions for this object.

@@ -349,7 +349,6 @@ func autoConvert_v1beta1_TalosConfigStatus_To_v1alpha3_TalosConfigStatus(in *v1b
 	} else {
 		out.Conditions = nil
 	}
-	// WARNING: in.Deprecated requires manual conversion: does not exist in peer-type
 	return nil
 }
 

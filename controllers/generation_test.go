@@ -6,6 +6,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -214,4 +215,21 @@ func TestReconcileLetsAStrategicPatchOverrideTheDiskSelector(t *testing.T) {
 	require.NotNil(t, provider.UnattendedInstallConfig())
 	assert.Equal(t, `disk.dev_path == "/dev/nvme0n1"`, provider.UnattendedInstallConfig().VolumeSelector().String())
 	assert.Equal(t, f.config(t).Status.ImageFactory.InstallerImage, provider.UnattendedInstallConfig().InstallerImage(), "the image survives the user's patch")
+}
+
+// TestReconcileWritesOnlyV1Beta2Conditions: the deprecated v1beta1 block is gone and the
+// summary condition is maintained in the v1beta2 shape alone.
+func TestReconcileWritesOnlyV1Beta2Conditions(t *testing.T) {
+	t.Parallel()
+
+	f := newImageFactoryFixture(t, bootstrapv1beta1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.14"}, nil)
+
+	require.NoError(t, f.reconcile(t))
+
+	cfg := f.config(t)
+	require.NotEmpty(t, cfg.Status.Conditions)
+
+	raw, err := json.Marshal(cfg.Status)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"deprecated"`)
 }

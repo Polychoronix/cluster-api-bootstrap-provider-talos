@@ -40,7 +40,6 @@ import (
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
-	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -171,22 +170,12 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	defer func() {
 		// always update the readyCondition; the summary is represented using the "1 of x completed" notation.
 		conditions.SetSummaryCondition(config, config, bootstrapv1beta1.DataSecretAvailableCondition)
-		v1beta1conditions.SetSummary(config,
-			v1beta1conditions.WithConditions(
-				bootstrapv1beta1.DataSecretAvailableV1Beta1Condition,
-			),
-		)
 
 		patchOpts := []patch.Option{
 			patch.WithOwnedConditions{
 				Conditions: []string{
 					bootstrapv1beta1.DataSecretAvailableCondition,
 					bootstrapv1beta1.ImageFactoryResolvedCondition,
-				},
-			},
-			patch.WithOwnedV1Beta1Conditions{
-				Conditions: []capiv1.ConditionType{
-					bootstrapv1beta1.DataSecretAvailableV1Beta1Condition,
 				},
 			},
 		}
@@ -279,7 +268,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 		}
 
-		v1beta1conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableV1Beta1Condition)
 		conditions.Set(config, metav1.Condition{
 			Type:   bootstrapv1beta1.DataSecretAvailableCondition,
 			Reason: bootstrapv1beta1.DataSecretAvailableReason,
@@ -290,21 +278,12 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		err = r.reconcileClientConfig(ctx, log, tcScope)
 
 		if err == nil {
-			v1beta1conditions.MarkTrue(config, bootstrapv1beta1.ClientConfigAvailableV1Beta1Condition)
 			conditions.Set(config, metav1.Condition{
 				Type:   bootstrapv1beta1.ClientConfigAvailableCondition,
 				Reason: bootstrapv1beta1.ClientConfigAvailableReason,
 				Status: metav1.ConditionTrue,
 			})
 		} else {
-			v1beta1conditions.MarkFalse(
-				config,
-				bootstrapv1beta1.ClientConfigAvailableV1Beta1Condition,
-				bootstrapv1beta1.ClientConfigGenerationFailedV1Beta1Reason,
-				capiv1.ConditionSeverityError,
-				"talosconfig generation failure: %s",
-				err.Error(),
-			)
 			conditions.Set(config, metav1.Condition{
 				Type:    bootstrapv1beta1.ClientConfigAvailableCondition,
 				Status:  metav1.ConditionFalse,
@@ -324,13 +303,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if !ptr.Deref(cluster.Status.Initialization.InfrastructureProvisioned, false) {
 		log.Info("Infrastructure is not ready, waiting until ready.")
 
-		v1beta1conditions.MarkFalse(
-			config,
-			bootstrapv1beta1.DataSecretAvailableV1Beta1Condition,
-			bootstrapv1beta1.WaitingForClusterInfrastructureV1Beta1Reason,
-			capiv1.ConditionSeverityInfo,
-			"",
-		)
 		conditions.Set(config, metav1.Condition{
 			Type:    bootstrapv1beta1.DataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
@@ -347,7 +319,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		config.Status.Initialization.DataSecretCreated = ptr.To(true)
 		config.Status.DataSecretName = *owner.DataSecretName()
 
-		v1beta1conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableV1Beta1Condition)
 		conditions.Set(config, metav1.Condition{
 			Type:   bootstrapv1beta1.DataSecretAvailableCondition,
 			Reason: bootstrapv1beta1.DataSecretAvailableReason,
@@ -365,7 +336,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	config.Status.Initialization.DataSecretCreated = ptr.To(true)
 
-	v1beta1conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableV1Beta1Condition)
 	conditions.Set(config, metav1.Condition{
 		Type:   bootstrapv1beta1.DataSecretAvailableCondition,
 		Reason: bootstrapv1beta1.DataSecretAvailableReason,
@@ -378,14 +348,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // markDataSecretGenerationFailed records a failure to render the machine configuration on both
 // the current and the deprecated v1beta1 condition.
 func markDataSecretGenerationFailed(config *bootstrapv1beta1.TalosConfig, err error) {
-	v1beta1conditions.MarkFalse(
-		config,
-		bootstrapv1beta1.DataSecretAvailableV1Beta1Condition,
-		bootstrapv1beta1.DataSecretGenerationFailedV1Beta1Reason,
-		capiv1.ConditionSeverityError,
-		"%s",
-		err.Error(),
-	)
 	conditions.Set(config, metav1.Condition{
 		Type:    bootstrapv1beta1.DataSecretAvailableCondition,
 		Status:  metav1.ConditionFalse,
