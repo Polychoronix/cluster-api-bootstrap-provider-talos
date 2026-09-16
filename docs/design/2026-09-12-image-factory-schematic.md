@@ -2,6 +2,9 @@
 
 Date: 2026-09-12. Status: approved design, awaiting implementation plan.
 
+Superseded in part by `2026-09-16-unattended-install-lifecycle-upgrades.md`: from Talos 1.14 the
+image is rendered as an `UnattendedInstallConfig` document rather than `machine.install.image`.
+
 Companion to the talos2disk action design in `sidero-community/actions`
 (`docs/superpowers/specs/2026-09-12-talos2disk-action-design.md`). That action
 installs Talos from the Image Factory raw image and reads the schematic and

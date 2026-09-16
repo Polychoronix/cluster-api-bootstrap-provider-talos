@@ -124,7 +124,7 @@ Fields available in the `TalosConfigTemplate` (and `TalosConfig`) resources:
 - `hostname` (optional): configure hostname in the generate machine configuration:
   - `source` (`MachineName`): set the hostname in the generated machine configuration to the `Machine` name (not supported with `MachinePool` deployments)
 - `imageFactory` (optional): the [Talos Image Factory](https://factory.talos.dev) schematic the machine installs and upgrades with.
-  CABPT registers the schematic, pins the Talos version (a bare minor in `talosVersion` resolves to the newest released patch once and is recorded in `status.imageFactory`), and renders `machine.install.image` as `<factory>/metal-installer/<schematic>:<version>`.
+  CABPT registers the schematic, pins the Talos version (a bare minor in `talosVersion` resolves to the newest released patch once and is recorded in `status.imageFactory`), and renders `<factory>/metal-installer/<schematic>:<version>` as the installer image: an `UnattendedInstallConfig` document from Talos 1.14 (disk selector `system_disk`, override it with a strategic patch), `machine.install.image` before.
   The controller talks to the Factory at `--image-factory-url` (default `https://factory.talos.dev`). Fields:
   - `extensions`: official system extension names, e.g. `siderolabs/nvme-cli`; each must exist for the resolved version.
   - `extraKernelArgs`: kernel arguments baked into the Factory images.

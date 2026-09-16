@@ -15,9 +15,9 @@ Talos, so these changes can instead be applied to the running machine.
 |---|---|---|
 | `TalosConfig.spec.configPatches` / `strategicPatches` / `data` / `hostname` | yes | config regenerated, applied with `ApplyConfiguration` in `AUTO` mode — Talos decides whether a reboot is needed |
 | `TalosConfig.spec.talosVersion` | yes | as above; changes the config contract used for generation |
-| `TalosConfig.spec.imageFactory` | yes | config regenerated with the new `machine.install.image`; the node is upgraded only if the image tag names a Talos version it is not already running |
+| `TalosConfig.spec.imageFactory` | yes | config regenerated with the new installer image (an `UnattendedInstallConfig` document from Talos 1.14, `machine.install.image` before); the node is upgraded only if the image tag names a Talos version it is not already running |
 | `Machine.spec.version` (Kubernetes) | yes | the version feeds the control plane component and kubelet images in the machine config |
-| Talos OS version (`machine.install.image`) | yes | Talos `Upgrade` API; Talos cordons and drains the node itself |
+| Talos OS version (installer image) | yes | Talos 1.13+: lifecycle service (pull, install, reboot), driven in the background and reported on each hook call; older nodes: the machine service `Upgrade`. Talos cordons and drains the node itself on reboot |
 | `TalosConfig.spec.generateType` | **no** | a worker↔control plane role flip cannot be applied to a running node |
 | InfrastructureMachine spec, by default | **no** | falls back to a rolling replacement |
 | TinkerbellMachine template / affinity / ISO URL | yes | see below |
@@ -196,10 +196,10 @@ would be applied, compare `<pool>-bootstrap-data` against a rendering of the cur
 
 ### What the MachinePool path does not do
 
-- **No Talos upgrades.** `machine.install.image` changes are written into the configuration but
-  no `Upgrade` call is made, because rebooting pool members is not something this controller can
+- **No Talos upgrades.** Installer image changes are written into the configuration but
+  no upgrade is started, because rebooting pool members is not something this controller can
   coordinate. Roll the pool to change the Talos version.
-- **Installer image.** `machine.install.image` comes from `spec.imageFactory` on the TalosConfig and
+- **Installer image.** The installer image comes from `spec.imageFactory` on the TalosConfig and
   is rendered and hashed for a pool exactly as for a Machine.
 - **Pool Machines are required.** Cluster API creates them only when the infrastructure provider
   publishes `status.infrastructureMachineKind` on its InfraMachinePool. Without them there is no
@@ -216,11 +216,13 @@ the runtime extension at all.
 
 ## Installer image resolution
 
-`machine.install.image` is rendered by CABPT itself from `spec.imageFactory` on the TalosConfig:
+The installer image is rendered by CABPT itself from `spec.imageFactory` on the TalosConfig:
 the schematic is registered with the Talos Image Factory, the Talos version is pinned in
 `status.imageFactory.talosVersion`, and the resulting
 `<factory>/metal-installer/<schematic>:<version>` is applied as a strategic patch ahead of any
-`strategicPatches`, so an explicit patch still wins.
+`strategicPatches`, so an explicit patch still wins. From Talos 1.14 (and for an unset
+`talosVersion`) it is an `UnattendedInstallConfig` document whose disk selector is `system_disk`;
+patch the document to choose another disk. Older contracts get `machine.install.image`.
 
 The image is part of the bootstrap data secret's config hash, so a change to the extension set
 or a version bump changes the hash, `UpdateMachine` sees a stale secret until CABPT re-renders,

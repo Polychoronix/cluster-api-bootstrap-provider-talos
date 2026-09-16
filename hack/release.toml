@@ -26,6 +26,17 @@ clusters need CAPI core v1.14.1 or later on the management cluster.
 CABPT is now compatible with Talos v1.14.0+. Configurations without a `talosVersion` are
 generated for Talos 1.14 and use the multi-document Kubernetes, discovery and identity
 configuration; pin `talosVersion` on configs that target older nodes.
+On Talos 1.14 contracts the resolved installer image is rendered as an
+UnattendedInstallConfig document (disk selector `system_disk`; patch the document to
+change it). In-place upgrades of Talos 1.13+ nodes go through the lifecycle service.
+"""
+
+[notes.api]
+    title = "API"
+    description = """\
+`status.deprecated.v1beta1` is removed from TalosConfig: only the v1beta2 conditions and
+`status.initialization` remain. v1alpha3 clients still see old-shape conditions, derived
+from the v1beta2 ones.
 """
 
 preface = """\
