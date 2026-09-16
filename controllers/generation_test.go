@@ -176,3 +176,42 @@ func TestReconcileRendersTheMachineNameAsHostname(t *testing.T) {
 		})
 	}
 }
+
+// TestReconcileRendersTheInstallerImageAsADocument: on a 1.14 contract the resolved image lands
+// in an UnattendedInstallConfig document with the system_disk selector, and no legacy block.
+func TestReconcileRendersTheInstallerImageAsADocument(t *testing.T) {
+	t.Parallel()
+
+	f := newImageFactoryFixture(t, specWith("v1.14", "siderolabs/nvme-cli"), newFakeFactory())
+
+	require.NoError(t, f.reconcile(t))
+
+	provider, err := configloader.NewFromBytes([]byte(f.bootstrapData(t)))
+	require.NoError(t, err)
+
+	image := f.config(t).Status.ImageFactory.InstallerImage
+	require.NotEmpty(t, image)
+	require.NotNil(t, provider.UnattendedInstallConfig(), "a 1.14 contract must carry the document")
+	assert.Equal(t, image, provider.UnattendedInstallConfig().InstallerImage())
+	assert.Equal(t, "system_disk", provider.UnattendedInstallConfig().VolumeSelector().String())
+	assert.Empty(t, provider.Machine().Install().Image(), "no legacy field alongside the document")
+}
+
+// TestReconcileLetsAStrategicPatchOverrideTheDiskSelector: CABPT's document is a default, so a
+// user's patch on the same document wins.
+func TestReconcileLetsAStrategicPatchOverrideTheDiskSelector(t *testing.T) {
+	t.Parallel()
+
+	spec := specWith("v1.14", "siderolabs/nvme-cli")
+	spec.StrategicPatches = []string{"apiVersion: v1alpha1\nkind: UnattendedInstallConfig\nprovisioning:\n  diskSelector:\n    match: disk.dev_path == \"/dev/nvme0n1\"\n"}
+
+	f := newImageFactoryFixture(t, spec, newFakeFactory())
+
+	require.NoError(t, f.reconcile(t))
+
+	provider, err := configloader.NewFromBytes([]byte(f.bootstrapData(t)))
+	require.NoError(t, err)
+	require.NotNil(t, provider.UnattendedInstallConfig())
+	assert.Equal(t, `disk.dev_path == "/dev/nvme0n1"`, provider.UnattendedInstallConfig().VolumeSelector().String())
+	assert.Equal(t, f.config(t).Status.ImageFactory.InstallerImage, provider.UnattendedInstallConfig().InstallerImage(), "the image survives the user's patch")
+}

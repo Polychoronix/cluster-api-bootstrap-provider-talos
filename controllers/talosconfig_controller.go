@@ -461,7 +461,12 @@ func (r *TalosConfigReconciler) reconcileGenerate(ctx context.Context, tcScope *
 
 	var resolvedPatches []string
 	if installerImage != "" {
-		resolvedPatches = append(resolvedPatches, installImagePatch(installerImage))
+		contract, err := versionContractFor(config.Spec.TalosVersion)
+		if err != nil {
+			return err
+		}
+
+		resolvedPatches = append(resolvedPatches, installImagePatch(contract, installerImage))
 	}
 
 	// Handle strategic merge patches.
@@ -536,6 +541,21 @@ func (r *TalosConfigReconciler) reconcileDelete(config *bootstrapv1beta1.TalosCo
 	controllerutil.RemoveFinalizer(config, bootstrapv1beta1.ConfigFinalizer)
 
 	return ctrl.Result{}, nil
+}
+
+// versionContractFor parses spec.talosVersion into the contract configuration is generated for.
+// Unset means the current Talos, which machinery represents as a nil contract.
+func versionContractFor(talosVersion string) (*config.VersionContract, error) {
+	if talosVersion == "" {
+		return defaultVersionContract, nil
+	}
+
+	contract, err := config.ParseContractFromVersion(talosVersion)
+	if err != nil {
+		return nil, fmt.Errorf("invalid talos-version: %w", err)
+	}
+
+	return contract, nil
 }
 
 func genTalosConfigFile(clusterName string, bundle *secrets.Bundle, endpoints []string) (string, error) {
@@ -677,14 +697,9 @@ func (r *TalosConfigReconciler) genConfigs(ctx context.Context, scope *TalosConf
 
 	genOptions := []generate.Option{generate.WithDNSDomain(clusterDNS)}
 
-	versionContract := defaultVersionContract
-
-	if scope.Config.Spec.TalosVersion != "" {
-		var err error
-		versionContract, err = config.ParseContractFromVersion(scope.Config.Spec.TalosVersion)
-		if err != nil {
-			return retBundle, patches, fmt.Errorf("invalid talos-version: %w", err)
-		}
+	versionContract, err := versionContractFor(scope.Config.Spec.TalosVersion)
+	if err != nil {
+		return retBundle, patches, err
 	}
 
 	genOptions = append(genOptions, generate.WithVersionContract(versionContract))
