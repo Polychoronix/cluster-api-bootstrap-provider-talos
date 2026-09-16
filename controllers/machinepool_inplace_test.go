@@ -128,6 +128,16 @@ func (r *recordingNode) Upgrade(_ context.Context, image string) error {
 	return nil
 }
 
+// LegacyUpgrade records like Upgrade: the MachinePool path never upgrades a node either way.
+func (r *recordingNode) LegacyUpgrade(_ context.Context, image string) error {
+	r.recorder.mu.Lock()
+	defer r.recorder.mu.Unlock()
+
+	r.recorder.upgrades = append(r.recorder.upgrades, image)
+
+	return nil
+}
+
 func (r *recordingNode) Close() error {
 	r.recorder.mu.Lock()
 	defer r.recorder.mu.Unlock()
