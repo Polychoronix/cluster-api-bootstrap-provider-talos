@@ -4,8 +4,6 @@
 
 package v1alpha3
 
-import capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
-
 // Conditions and condition Reasons for the TalosConfig object
 
 const (
@@ -14,7 +12,7 @@ const (
 	// NOTE: When the DataSecret generation starts the process completes immediately and within the
 	// same reconciliation, so the user will always see a transition from Wait to Generated without having
 	// evidence that BootstrapSecret generation is started/in progress.
-	DataSecretAvailableCondition capiv1.ConditionType = "DataSecretAvailable"
+	DataSecretAvailableCondition ConditionType = "DataSecretAvailable"
 
 	// DataSecretAvailableReason documents a succeeded bootstrap secret generation process.
 	//
@@ -36,7 +34,7 @@ const (
 
 const (
 	// ClientConfigAvailableCondition documents the status of the client config generation process.
-	ClientConfigAvailableCondition capiv1.ConditionType = "ClientConfigAvailable"
+	ClientConfigAvailableCondition ConditionType = "ClientConfigAvailable"
 
 	// ClientConfigGenerationFailedReason (Severity=Warning) documents a TalosConfig controller detecting
 	// an error while generating a client config; those kind of errors are usually due to misconfigurations

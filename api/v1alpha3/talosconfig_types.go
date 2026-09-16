@@ -6,7 +6,6 @@ package v1alpha3
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 )
 
 const (
@@ -82,7 +81,7 @@ type TalosConfigStatus struct {
 
 	// Conditions defines current service state of the TalosConfig.
 	// +optional
-	Conditions capiv1.Conditions `json:"conditions,omitempty"`
+	Conditions Conditions `json:"conditions,omitempty"`
 
 	// v1beta2 groups all the fields that will be added or modified in TalosConfig's status with the V1Beta2 version.
 	// +optional
@@ -112,12 +111,12 @@ type TalosConfig struct {
 }
 
 // GetConditions returns the set of conditions for this object.
-func (c *TalosConfig) GetConditions() capiv1.Conditions {
+func (c *TalosConfig) GetConditions() Conditions {
 	return c.Status.Conditions
 }
 
 // SetConditions sets the conditions on this object.
-func (c *TalosConfig) SetConditions(conditions capiv1.Conditions) {
+func (c *TalosConfig) SetConditions(conditions Conditions) {
 	c.Status.Conditions = conditions
 }
 

@@ -4,22 +4,22 @@
 
 package v1alpha3
 
-import capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
+import clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 // Conditions and condition Reasons for the TalosConfig object
 
 const (
 	// TalosConfigReadyV1Beta2Condition condition is true when all ClientConfigAvailable and DataSecretAvailable conditions are true.
-	TalosConfigReadyV1Beta2Condition = capiv1.ReadyV1Beta2Condition
+	TalosConfigReadyV1Beta2Condition = clusterv1.ReadyCondition
 
 	// TalosConfigNotReadyV1Beta2Reason surfaces when TalosConfig is ready.
-	TalosConfigReadyV1Beta2Reason = capiv1.ReadyV1Beta2Reason
+	TalosConfigReadyV1Beta2Reason = clusterv1.ReadyReason
 
 	// TalosConfigNotReadyV1Beta2Reason surfaces when TalosConfig is not ready.
-	TalosConfigNotReadyV1Beta2Reason = capiv1.NotReadyV1Beta2Reason
+	TalosConfigNotReadyV1Beta2Reason = clusterv1.NotReadyReason
 
 	// TalosConfigReadyUnknownV1Beta2Reason surfaces when TalosConfig readiness is unknown.
-	TalosConfigReadyUnknownV1Beta2Reason = capiv1.ReadyUnknownV1Beta2Reason
+	TalosConfigReadyUnknownV1Beta2Reason = clusterv1.ReadyUnknownReason
 )
 
 const (
@@ -27,11 +27,11 @@ const (
 	ClientConfigAvailableV1Beta2Condition = "ClientConfigAvailable"
 
 	// ClientConfigAvailableV1Beta2Reason surfaces when generated Talos client config is available.
-	ClientConfigAvailableV1Beta2Reason = capiv1.AvailableV1Beta2Reason
+	ClientConfigAvailableV1Beta2Reason = clusterv1.AvailableReason
 
 	// ClientConfigAvailableInternalErrorV1Beta2Reason surfaces unexpected failures when reading or generating
 	// Talos client config.
-	ClientConfigAvailableInternalErrorV1Beta2Reason = capiv1.InternalErrorV1Beta2Reason
+	ClientConfigAvailableInternalErrorV1Beta2Reason = clusterv1.InternalErrorReason
 )
 
 const (
@@ -43,8 +43,8 @@ const (
 	DataSecretAvailableV1Beta2Condition = "DataSecretAvailable"
 
 	// DataSecretAvailableV1Beta2Condition surfaces when Talos bootstrap secret is available.
-	DataSecretAvailableV1Beta2Reason = capiv1.AvailableV1Beta2Reason
+	DataSecretAvailableV1Beta2Reason = clusterv1.AvailableReason
 
 	// DataSecretNotAvailableV1Beta2Condition surfaces when Talos bootstrap is not available.
-	DataSecretNotAvailableV1Beta2Reason = capiv1.NotAvailableV1Beta2Reason
+	DataSecretNotAvailableV1Beta2Reason = clusterv1.NotAvailableReason
 )

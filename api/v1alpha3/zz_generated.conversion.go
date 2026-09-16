@@ -13,10 +13,10 @@ import (
 	unsafe "unsafe"
 
 	v1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	corev1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 )
 
 func init() {
@@ -106,18 +106,18 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddConversionFunc((*v1.Condition)(nil), (*corev1beta1.Condition)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1_Condition_To_v1beta1_Condition(a.(*v1.Condition), b.(*corev1beta1.Condition), scope)
+	if err := s.AddConversionFunc((*v1.Condition)(nil), (*Condition)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1_Condition_To_v1alpha3_Condition(a.(*v1.Condition), b.(*Condition), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*Condition)(nil), (*v1.Condition)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_Condition_To_v1_Condition(a.(*Condition), b.(*v1.Condition), scope)
 	}); err != nil {
 		return err
 	}
 	if err := s.AddConversionFunc((*TalosConfigStatus)(nil), (*v1beta1.TalosConfigStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha3_TalosConfigStatus_To_v1beta1_TalosConfigStatus(a.(*TalosConfigStatus), b.(*v1beta1.TalosConfigStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddConversionFunc((*corev1beta1.Condition)(nil), (*v1.Condition)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta1_Condition_To_v1_Condition(a.(*corev1beta1.Condition), b.(*v1.Condition), scope)
 	}); err != nil {
 		return err
 	}
@@ -136,6 +136,26 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	return nil
+}
+
+func autoConvert_v1alpha3_Condition_To_v1_Condition(in *Condition, out *v1.Condition, s conversion.Scope) error {
+	out.Type = string(in.Type)
+	out.Status = v1.ConditionStatus(in.Status)
+	// WARNING: in.Severity requires manual conversion: does not exist in peer-type
+	out.LastTransitionTime = in.LastTransitionTime
+	out.Reason = in.Reason
+	out.Message = in.Message
+	return nil
+}
+
+func autoConvert_v1_Condition_To_v1alpha3_Condition(in *v1.Condition, out *Condition, s conversion.Scope) error {
+	out.Type = ConditionType(in.Type)
+	out.Status = corev1.ConditionStatus(in.Status)
+	// WARNING: in.ObservedGeneration requires manual conversion: does not exist in peer-type
+	out.LastTransitionTime = in.LastTransitionTime
+	out.Reason = in.Reason
+	out.Message = in.Message
 	return nil
 }
 
@@ -300,7 +320,7 @@ func autoConvert_v1alpha3_TalosConfigStatus_To_v1beta1_TalosConfigStatus(in *Tal
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))
 		for i := range *in {
-			if err := Convert_v1beta1_Condition_To_v1_Condition(&(*in)[i], &(*out)[i], s); err != nil {
+			if err := Convert_v1alpha3_Condition_To_v1_Condition(&(*in)[i], &(*out)[i], s); err != nil {
 				return err
 			}
 		}
@@ -320,9 +340,9 @@ func autoConvert_v1beta1_TalosConfigStatus_To_v1alpha3_TalosConfigStatus(in *v1b
 	out.ObservedGeneration = in.ObservedGeneration
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make(corev1beta1.Conditions, len(*in))
+		*out = make(Conditions, len(*in))
 		for i := range *in {
-			if err := Convert_v1_Condition_To_v1beta1_Condition(&(*in)[i], &(*out)[i], s); err != nil {
+			if err := Convert_v1_Condition_To_v1alpha3_Condition(&(*in)[i], &(*out)[i], s); err != nil {
 				return err
 			}
 		}
