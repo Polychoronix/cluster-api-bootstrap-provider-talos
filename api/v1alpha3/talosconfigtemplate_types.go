@@ -35,5 +35,5 @@ type TalosConfigTemplateList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&TalosConfigTemplate{}, &TalosConfigTemplateList{})
+	register(&TalosConfigTemplate{}, &TalosConfigTemplateList{})
 }
