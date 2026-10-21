@@ -17,10 +17,11 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/configpatcher"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
-	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	runtimeconfig "github.com/siderolabs/talos/pkg/machinery/config/types/runtime"
 	"github.com/siderolabs/talos/pkg/machinery/config/validation"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"go.yaml.in/yaml/v3"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
@@ -30,7 +31,6 @@ import (
 type RenderContext struct {
 	Machine        *clusterv1.Machine
 	Cluster        *clusterv1.Cluster
-	SecretsBundle  *secrets.Bundle
 	InstallerImage string
 }
 
@@ -62,8 +62,8 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 	data := inputs.base
 	var hostname string
 	if len(data) == 0 {
-		if context.SecretsBundle == nil {
-			return nil, failure("cluster identity", "missing")
+		if inputs.bundle == nil {
+			return nil, failure("generation identity", "snapshot required")
 		}
 		kind, parseErr := machine.ParseType(spec.GenerateType)
 		if parseErr != nil || kind == machine.TypeUnknown {
@@ -77,7 +77,7 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 		if domain == "" {
 			domain = constants.DefaultDNSDomain
 		}
-		opts := []generate.Option{generate.WithDNSDomain(domain), generate.WithVersionContract(contract), generate.WithSecretsBundle(context.SecretsBundle)}
+		opts := []generate.Option{generate.WithDNSDomain(domain), generate.WithVersionContract(contract), generate.WithSecretsBundle(inputs.bundle)}
 		if contract != nil && contract.Major < 1 && contract.Minor < 14 {
 			opts = append(opts, generate.WithClusterDiscovery(false))
 		}
@@ -109,11 +109,12 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 	}
 	provider, err := configloader.NewFromBytes(data)
 	if err != nil {
-		return nil, failure("baseline", "parse")
+		return nil, failure(inputs.baseReference(), "parse")
 	}
 	if provider.Machine() == nil {
 		return nil, failure("baseline", "role")
 	}
+	initialRole := provider.Machine().Type()
 	if spec.GenerateType == "worker" || spec.GenerateType == "controlplane" {
 		kind, _ := machine.ParseType(spec.GenerateType)
 		if provider.Machine().Type() != kind {
@@ -173,7 +174,27 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 	}
 	values := make([][]byte, 0, len(spec.StrategicPatches)+2)
 	if context.InstallerImage != "" {
-		values = append(values, []byte(InstallerPatch(contract, context.InstallerImage)))
+		patch := InstallerPatch(contract, context.InstallerImage)
+		if inputs.HasBaseline() {
+			if install := provider.UnattendedInstallConfig(); install != nil {
+				for _, document := range provider.Documents() {
+					if doc, ok := document.(*runtimeconfig.UnattendedInstallConfigV1Alpha1); ok {
+						copy := doc.Clone().(*runtimeconfig.UnattendedInstallConfigV1Alpha1)
+						copy.Installer.Image = context.InstallerImage
+						encoded, err := yaml.Marshal(copy)
+						if err != nil {
+							return nil, failure(inputs.baseReference(), "installer encoding")
+						}
+						patch = string(encoded)
+					}
+				}
+			} else if provider.Machine().Install() != nil && provider.Machine().Install().Image() != "" {
+				patch = fmt.Sprintf("machine:\n  install:\n    image: %s\n", context.InstallerImage)
+			} else {
+				return nil, failure(inputs.baseReference(), "reviewed installer configuration required")
+			}
+		}
+		values = append(values, []byte(patch))
 	}
 	for _, patch := range spec.StrategicPatches {
 		values = append(values, []byte(patch))
@@ -190,8 +211,11 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 	if err := applyStrategic(values, "shared public"); err != nil {
 		return nil, err
 	}
-	if err := applyStrategic(inputs.shared, "shared Secret"); err != nil {
-		return nil, err
+	for i, value := range inputs.shared {
+		ref := spec.StrategicPatchSecretRefs[i]
+		if err := applyStrategic([][]byte{value}, inputs.config.Namespace+"/"+ref.Name+"/"+ref.Key); err != nil {
+			return nil, err
+		}
 	}
 	if overlay := spec.MachineConfig; overlay != nil {
 		if err := applyJSON(overlay.ConfigPatches, "Machine public"); err != nil {
@@ -205,8 +229,11 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 			return nil, err
 		}
 	}
-	if err := applyStrategic(inputs.machine, "Machine Secret"); err != nil {
-		return nil, err
+	for i, value := range inputs.machine {
+		ref := spec.MachineConfig.StrategicPatchSecretRefs[i]
+		if err := applyStrategic([][]byte{value}, inputs.config.Namespace+"/"+ref.Name+"/"+ref.Key); err != nil {
+			return nil, err
+		}
 	}
 	if inputs.HasBaseline() {
 		if err := validateBaselineVersion(data, context.Machine.Spec.Version); err != nil {
@@ -216,6 +243,9 @@ func Render(inputs *Resolved, context RenderContext) (*Rendered, error) {
 	finalConfig, err := configloader.NewFromBytes(data)
 	if err != nil {
 		return nil, failure("rendered", "parse")
+	}
+	if finalConfig.Machine() == nil || finalConfig.Machine().Type() != initialRole {
+		return nil, failure("rendered", "role change is not supported")
 	}
 	if _, err := finalConfig.ValidateAsClient(renderMode{}, validation.WithLocal()); err != nil {
 		return nil, failure("rendered", "validation")

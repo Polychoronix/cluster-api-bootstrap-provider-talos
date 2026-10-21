@@ -192,7 +192,16 @@ identities; runtime updates use the live TalosConfig output rather than an
 adopted Machine's original installation seed. No resolved private digest is
 published on Machine/TalosConfig annotations or conditions. Existing MachinePool
 convergence annotations retain only the public spec/reference/revision token.
+MachineDeployment updates rotate the immutable `TalosConfigTemplate`: create a
+new named template containing the new public desired revision, then update the
+MachineDeployment bootstrap template reference. Do not edit an existing template
+in place. Both old and new MachineSets must have bootstrap templates for in-place
+planning; establish that association before initial owner adoption.
 
+On imported baselines, a resolved installer image changes only the image and
+retains the complete reviewed install/provisioning/disk-selection policy. Missing
+installer policy requires reviewed input rather than a generated disk default.
+The final role must match the original baseline/generated role after all patches.
 Baseline-backed Kubernetes transitions require a reviewed baseline/patch whose
 kubelet and enabled control-plane component image version tags match the
 requested Machine version; mismatches fail before apply. Custom registry ports

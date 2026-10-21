@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -39,6 +40,7 @@ type Resolved struct {
 	base            []byte
 	shared, machine [][]byte
 	sources         []source
+	bundle          *secrets.Bundle
 }
 type source struct {
 	Name            string    `json:"name"`
@@ -102,6 +104,26 @@ func Resolve(ctx context.Context, reader client.Reader, config *bootstrapv1.Talo
 			r.machine = append(r.machine, data)
 		}
 	}
+	if !r.HasBaseline() {
+		clusterName := config.Labels["cluster.x-k8s.io/cluster-name"]
+		if clusterName == "" {
+			return nil, failure("generation identity", "Cluster association required")
+		}
+		secret := &corev1.Secret{}
+		if err := reader.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: clusterName + "-talos"}, secret); err != nil {
+			return nil, failure("generation identity", "lookup")
+		}
+		bundle, err := generationBundle(secret)
+		if err != nil {
+			return nil, err
+		}
+		r.bundle = bundle
+		encoded, err := json.Marshal(secret.Data)
+		if err != nil {
+			return nil, failure("generation identity", "snapshot")
+		}
+		r.sources = append(r.sources, source{Name: secret.Name, UID: secret.UID, ResourceVersion: secret.ResourceVersion, Digest: sha256.Sum256(encoded)})
+	}
 	return r, nil
 }
 
@@ -113,6 +135,17 @@ func (r *Resolved) String() string   { return "<private resolved configuration>"
 func (r *Resolved) GoString() string { return r.String() }
 func (r *Resolved) MarshalJSON() ([]byte, error) {
 	return []byte(`"<private resolved configuration>"`), nil
+}
+
+func (r *Resolved) baseReference() string {
+	ref := r.config.Spec.ConfigSecretRef
+	if r.config.Spec.MachineConfig != nil && r.config.Spec.MachineConfig.ConfigSecretRef != nil {
+		ref = r.config.Spec.MachineConfig.ConfigSecretRef
+	}
+	if ref == nil {
+		return "baseline"
+	}
+	return r.config.Namespace + "/" + ref.Name + "/" + ref.Key
 }
 
 func (r *Resolved) fingerprint(context RenderContext) ([]byte, error) {

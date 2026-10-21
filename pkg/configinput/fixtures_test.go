@@ -34,8 +34,6 @@ const privateSentinel = "private-config-sentinel-never-public"
 
 func ownerContext(t *testing.T) configinput.RenderContext {
 	t.Helper()
-	bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)), config.TalosVersion1_14)
-	require.NoError(t, err)
 	cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "tenant", UID: "cluster-uid", Generation: 4}}
 	cluster.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: "api.example.com", Port: 6443}
 	cluster.Spec.ClusterNetwork.ServiceDomain = "example.internal"
@@ -44,13 +42,15 @@ func ownerContext(t *testing.T) configinput.RenderContext {
 	owner := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Name: "node", Namespace: "tenant", UID: "machine-uid"}}
 	owner.Spec.Version = "v1.37.0"
 	owner.Spec.InfrastructureRef.Name = "infra-node"
-	return configinput.RenderContext{Machine: owner, Cluster: cluster, SecretsBundle: bundle}
+	return configinput.RenderContext{Machine: owner, Cluster: cluster}
 }
 
 func generatedBaseline(t *testing.T, ctx configinput.RenderContext, contract *config.VersionContract, role machine.Type) []byte {
 	t.Helper()
+	bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)), contract)
+	require.NoError(t, err)
 	input, err := generate.NewInput("cluster", "https://api.example.com:6443", "1.37.0",
-		generate.WithVersionContract(contract), generate.WithSecretsBundle(ctx.SecretsBundle), generate.WithDNSDomain("example.internal"))
+		generate.WithVersionContract(contract), generate.WithSecretsBundle(bundle), generate.WithDNSDomain("example.internal"))
 	require.NoError(t, err)
 	input.PodNet = []string{"10.244.0.0/16"}
 	input.ServiceNet = []string{"10.96.0.0/12"}
@@ -126,7 +126,7 @@ filesystem:
 }
 
 func inputConfig() *bootstrapv1.TalosConfig {
-	return &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "tenant", UID: "config-uid", Generation: 2},
+	return &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "tenant", UID: "config-uid", Generation: 2, Labels: map[string]string{clusterv1.ClusterNameLabel: "cluster"}},
 		Spec: bootstrapv1.TalosConfigSpec{GenerateType: "none", TalosVersion: "v1.14", ConfigSecretRef: &bootstrapv1.SecretKeyReference{Name: "base", Key: "config"}}}
 }
 

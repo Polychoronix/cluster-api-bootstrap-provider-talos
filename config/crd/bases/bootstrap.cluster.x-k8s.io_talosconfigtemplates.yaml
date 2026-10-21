@@ -235,7 +235,7 @@ spec:
                     - message: data cannot be combined with a Secret baseline
                       rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
                         && has(self.machineConfig.configSecretRef))) || !has(self.data)
-                        || self.data == '''''
+                        || size(self.data) == 0'
                     - message: Secret baselines require none, controlplane or worker
                       rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
                         && has(self.machineConfig.configSecretRef))) || self.generateType
@@ -578,7 +578,7 @@ spec:
                     - message: data cannot be combined with a Secret baseline
                       rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
                         && has(self.machineConfig.configSecretRef))) || !has(self.data)
-                        || self.data == '''''
+                        || size(self.data) == 0'
                     - message: Secret baselines require none, controlplane or worker
                       rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
                         && has(self.machineConfig.configSecretRef))) || self.generateType

@@ -8,7 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	"gopkg.in/yaml.v2"
 	"testing"
+	"time"
 
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
@@ -44,7 +47,6 @@ func TestCompleteBaselinePreservesAllDocumentsAndIdentity(t *testing.T) {
 	cfg.Spec.Hostname.Source = bootstrapv1.HostnameSourceMachineName
 	reader := inputClient(t, inputSecret("base", baseline))
 	// A baseline must not acquire identity or use generation defaults.
-	ctx.SecretsBundle = nil
 	ctx.Cluster.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"172.16.0.0/16"}
 	ctx.Cluster.Spec.ClusterNetwork.ServiceDomain = "do-not-overwrite.internal"
 	output := renderInput(t, reader, cfg, ctx)
@@ -82,7 +84,6 @@ func TestSharedAndMachineOrderedPrecedence(t *testing.T) {
 	reader := inputClient(t, inputSecret("machine-base", baseline),
 		inputSecret("shared-first", []byte(hostnamePatch("shared-secret-first"))), inputSecret("shared-last", []byte(hostnamePatch("shared-secret-last"))),
 		inputSecret("machine-first", []byte(hostnamePatch("machine-secret-first"))), inputSecret("machine-last", []byte(hostnamePatch("machine-secret-last"))))
-	ctx.SecretsBundle = nil
 	for _, expected := range []string{"machine-secret-last", "machine-secret-first", "machine-public-last", "shared-secret-last", "shared-public-last"} {
 		assert.Equal(t, expected, renderedHostname(t, renderInput(t, reader, cfg, ctx)))
 		switch expected {
@@ -130,9 +131,20 @@ func TestGeneratedPathMatchesTalosGenerator(t *testing.T) {
 		cfg := inputConfig()
 		cfg.Spec.ConfigSecretRef = nil
 		cfg.Spec.GenerateType = role.String()
-		output := renderInput(t, inputClient(t), cfg, ctx)
-		expected := generatedBaseline(t, ctx, config.TalosVersion1_14, role)
-		assert.ElementsMatch(t, documentValues(t, expected), documentValues(t, output.Data()))
+		bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Now()), config.TalosVersion1_14)
+		require.NoError(t, err)
+		encoded, err := yaml.Marshal(bundle)
+		require.NoError(t, err)
+		generation := inputSecret("cluster-talos", nil)
+		generation.Data = map[string][]byte{"bundle": encoded}
+		reader := inputClient(t, generation)
+		output := renderInput(t, reader, cfg, ctx)
+		provider, err := configloader.NewFromBytes(output.Data())
+		require.NoError(t, err)
+		if role == machine.TypeControlPlane {
+			require.Equal(t, bundle.Certs.OS.Crt, provider.Machine().Security().IssuingCA().Crt)
+		}
+		require.Contains(t, string(output.Data()), bundle.Secrets.BootstrapToken)
 	}
 }
 

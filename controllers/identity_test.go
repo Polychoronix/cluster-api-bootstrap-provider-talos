@@ -287,7 +287,7 @@ func TestImportedSecretFailureRedactsControllerPublicObjectsAndLogs(t *testing.T
 		assert.NotContains(t, visible, string(bundle.Certs.OS.Key))
 	}
 	assert.Empty(t, f.config(t).Status.DataSecretName)
-	assert.Contains(t, err.Error(), "Secret")
+	assert.Contains(t, err.Error(), "default/private-patch/patch")
 }
 
 func TestBaselineIssuedClientRemainsReadOnlyWithoutGeneratedBundle(t *testing.T) {

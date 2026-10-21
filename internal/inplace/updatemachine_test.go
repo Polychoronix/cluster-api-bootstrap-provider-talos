@@ -16,6 +16,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -161,7 +162,7 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 	}
 
 	liveConfig := &bootstrapv1beta1.TalosConfig{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "machine-1"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "machine-1", Labels: map[string]string{clusterv1.ClusterNameLabel: cluster}},
 		Spec:       bootstrapv1beta1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.13"},
 	}
 	liveConfig.Status.DataSecretName = secret.Name
@@ -171,8 +172,13 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 		liveConfig.Status.ImageFactory = &bootstrapv1beta1.ImageFactoryStatus{InstallerImage: resolvedImage}
 	}
 
+	bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Now()), config.TalosVersion1_13)
+	require.NoError(t, err)
+	encoded, err := yaml.Marshal(bundle)
+	require.NoError(t, err)
+	generation := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: cluster + "-talos"}, Data: map[string][]byte{"bundle": encoded}}
 	handler := NewHandler(
-		fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig, liveCluster).Build(),
+		fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig, liveCluster, generation).Build(),
 		func(context.Context, types.NamespacedName, bootstrapv1beta1.TalosEndpoint) (NodeClient, error) {
 			return node, nil
 		},
@@ -180,12 +186,10 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 	if secretHash != "stale-hash" {
 		inputs, err := configinput.Resolve(context.Background(), handler.client, liveConfig)
 		require.NoError(t, err)
-		bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Now()), config.TalosVersion1_13)
-		require.NoError(t, err)
-		rendered, err := configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster, InstallerImage: resolvedImage, SecretsBundle: bundle})
+		rendered, err := configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster, InstallerImage: resolvedImage})
 		require.NoError(t, err)
 		if resolvedImage != "" && secretHash == freshHash(t) {
-			rendered, err = configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster, SecretsBundle: bundle})
+			rendered, err = configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster})
 			require.NoError(t, err)
 		}
 		secret.Data[configinput.FreshnessKey] = rendered.Freshness()

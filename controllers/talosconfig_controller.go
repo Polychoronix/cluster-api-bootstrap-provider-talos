@@ -339,10 +339,6 @@ func markDataSecretGenerationFailed(config *bootstrapv1beta1.TalosConfig, err er
 }
 
 func (r *TalosConfigReconciler) reconcileGenerate(ctx context.Context, scope *TalosConfigScope) error {
-	inputs, err := configinput.Resolve(ctx, r.Client, scope.Config)
-	if err != nil {
-		return err
-	}
 	installerImage, err := r.resolveInstallerImage(ctx, scope.Config)
 	if err != nil {
 		return err
@@ -351,18 +347,27 @@ func (r *TalosConfigReconciler) reconcileGenerate(ctx context.Context, scope *Ta
 	if err != nil {
 		return err
 	}
-	if !inputs.HasBaseline() {
+	hasBaseline := scope.Config.Spec.GenerateType == "none" || scope.Config.Spec.ConfigSecretRef != nil || scope.Config.Spec.MachineConfig != nil && scope.Config.Spec.MachineConfig.ConfigSecretRef != nil
+	if !hasBaseline {
 		contract, err := versionContractFor(scope.Config.Spec.TalosVersion)
 		if err != nil {
 			return fmt.Errorf("configuration input TalosConfig: version contract failed")
 		}
-		renderContext.SecretsBundle, err = r.getSecretsBundle(ctx, scope, true, contract)
+		bundle, err := r.getSecretsBundle(ctx, scope, true, contract)
 		if err != nil {
 			return fmt.Errorf("configuration input cluster identity: resolve failed")
 		}
-		if err := r.writeK8sCASecret(ctx, scope, renderContext.SecretsBundle.Certs.K8s); err != nil {
+		if err := r.writeK8sCASecret(ctx, scope, bundle.Certs.K8s); err != nil {
 			return err
 		}
+	}
+	if scope.Config.Labels == nil {
+		scope.Config.Labels = map[string]string{}
+	}
+	scope.Config.Labels[capiv1.ClusterNameLabel] = scope.Cluster.Name
+	inputs, err := configinput.Resolve(ctx, r.Client, scope.Config)
+	if err != nil {
+		return err
 	}
 	rendered, err := configinput.Render(inputs, renderContext)
 	if err != nil {

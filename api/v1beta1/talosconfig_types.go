@@ -14,7 +14,7 @@ const (
 )
 
 // TalosConfigSpec defines the desired state of TalosConfig
-// +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || !has(self.data) || self.data == ”",message="data cannot be combined with a Secret baseline"
+// +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || !has(self.data) || size(self.data) == 0",message="data cannot be combined with a Secret baseline"
 // +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || self.generateType in ['none', 'controlplane', 'worker']",message="Secret baselines require none, controlplane or worker"
 type TalosConfigSpec struct {
 	// Version of Talos to generate machine configuration for, i.e. v1.0 (patch version may be omitted).
