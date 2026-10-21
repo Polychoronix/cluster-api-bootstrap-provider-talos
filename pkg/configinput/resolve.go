@@ -40,10 +40,12 @@ type Resolved struct {
 	config          *bootstrapv1.TalosConfig
 	base            []byte
 	shared, machine [][]byte
-	sources         []source
+	sources         []SourceIdentity
 	bundle          *secrets.Bundle
 }
-type source struct {
+
+// SourceIdentity is a private resolved source receipt; never publish its digest.
+type SourceIdentity struct {
 	Name            string    `json:"name"`
 	Key             string    `json:"key"`
 	UID             types.UID `json:"uid"`
@@ -74,7 +76,7 @@ func Resolve(ctx context.Context, reader client.Reader, config *bootstrapv1.Talo
 		if len(bytes.TrimSpace(data)) == 0 {
 			return nil, failure(key.String()+"/"+ref.Key, "empty")
 		}
-		r.sources = append(r.sources, source{Name: ref.Name, Key: ref.Key, UID: secret.UID, ResourceVersion: secret.ResourceVersion, Digest: sha256.Sum256(data)})
+		r.sources = append(r.sources, SourceIdentity{Name: ref.Name, Key: ref.Key, UID: secret.UID, ResourceVersion: secret.ResourceVersion, Digest: sha256.Sum256(data)})
 		return data, nil
 	}
 	if baseline != nil {
@@ -131,7 +133,7 @@ func Resolve(ctx context.Context, reader client.Reader, config *bootstrapv1.Talo
 		if err != nil {
 			return nil, failure("generation identity", "snapshot")
 		}
-		r.sources = append(r.sources, source{Name: secret.Name, UID: secret.UID, ResourceVersion: secret.ResourceVersion, Digest: sha256.Sum256(encoded)})
+		r.sources = append(r.sources, SourceIdentity{Name: secret.Name, UID: secret.UID, ResourceVersion: secret.ResourceVersion, Digest: sha256.Sum256(encoded)})
 	}
 	return r, nil
 }
@@ -163,17 +165,17 @@ func (r *Resolved) fingerprint(context RenderContext) ([]byte, error) {
 		return nil, failure("TalosConfig", "freshness")
 	}
 	metadata := struct {
-		ConfigUID         types.UID `json:"configUID"`
-		Generation        int64     `json:"generation"`
-		MachineUID        types.UID `json:"machineUID"`
-		ClusterUID        types.UID `json:"clusterUID"`
-		ClusterGeneration int64     `json:"clusterGeneration"`
-		SpecDigest        [32]byte  `json:"specDigest"`
-		MachineVersion    string    `json:"machineVersion"`
-		Hostname          string    `json:"hostname"`
-		ClusterDigest     [32]byte  `json:"clusterDigest"`
-		InstallerImage    string    `json:"installerImage"`
-		Sources           []source  `json:"sources"`
+		ConfigUID         types.UID        `json:"configUID"`
+		Generation        int64            `json:"generation"`
+		MachineUID        types.UID        `json:"machineUID"`
+		ClusterUID        types.UID        `json:"clusterUID"`
+		ClusterGeneration int64            `json:"clusterGeneration"`
+		SpecDigest        [32]byte         `json:"specDigest"`
+		MachineVersion    string           `json:"machineVersion"`
+		Hostname          string           `json:"hostname"`
+		ClusterDigest     [32]byte         `json:"clusterDigest"`
+		InstallerImage    string           `json:"installerImage"`
+		Sources           []SourceIdentity `json:"sources"`
 	}{ConfigUID: r.config.UID, Generation: r.config.Generation, MachineUID: context.Machine.UID, ClusterUID: context.Cluster.UID, ClusterGeneration: context.Cluster.Generation,
 		SpecDigest: sha256.Sum256(encoded), MachineVersion: context.Machine.Spec.Version,
 		Hostname: context.Machine.Name + "/" + context.Machine.Spec.InfrastructureRef.Name, InstallerImage: context.InstallerImage, Sources: r.sources}
@@ -187,6 +189,17 @@ func (r *Resolved) fingerprint(context RenderContext) ([]byte, error) {
 	}
 	metadata.ClusterDigest = sha256.Sum256(clusterInputs)
 	return json.Marshal(metadata)
+}
+
+// Sources returns an owned source snapshot for a private Prepared transaction.
+func (r *Resolved) Sources() []SourceIdentity { return append([]SourceIdentity(nil), r.sources...) }
+
+// Freshness returns the private fingerprint of this exact resolved snapshot.
+func (r *Resolved) Freshness(context RenderContext) ([]byte, error) {
+	if context.Machine == nil || context.Cluster == nil {
+		return nil, failure("owner", "freshness")
+	}
+	return r.fingerprint(context)
 }
 
 // IsFresh re-resolves source identities before accepting a generated output Secret.
