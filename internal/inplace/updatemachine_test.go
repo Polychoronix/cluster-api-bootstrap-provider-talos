@@ -177,8 +177,9 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 	encoded, err := yaml.Marshal(bundle)
 	require.NoError(t, err)
 	generation := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: cluster + "-talos"}, Data: map[string][]byte{"bundle": encoded}}
+	management := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig, liveCluster, generation).Build()
 	handler := NewHandler(
-		fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig, liveCluster, generation).Build(),
+		management, management,
 		func(context.Context, types.NamespacedName, bootstrapv1beta1.TalosEndpoint) (NodeClient, error) {
 			return node, nil
 		},

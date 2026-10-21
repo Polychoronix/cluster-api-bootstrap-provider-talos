@@ -26,16 +26,17 @@ type runtimeRawExtension = runtime.RawExtension
 // Handler serves the Cluster API in-place update hooks for Talos machines.
 type Handler struct {
 	client        client.Client
+	reader        client.Reader
 	newNodeClient NodeClientFactory
 	upgrades      *upgradeTracker
 }
 
-// NewHandler builds a Handler backed by the management cluster client c, opening Talos
-// connections through factory. Passing a fake factory is how the update state machine is
-// tested without hardware.
-func NewHandler(c client.Client, factory NodeClientFactory) *Handler {
+// NewHandler separates write access from the uncached reader used for operation guards.
+// Production callers must pass manager.GetAPIReader, not the reconcile cache.
+func NewHandler(c client.Client, reader client.Reader, factory NodeClientFactory) *Handler {
 	return &Handler{
 		client:        c,
+		reader:        reader,
 		newNodeClient: factory,
 		upgrades:      newUpgradeTracker(),
 	}

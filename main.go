@@ -214,7 +214,7 @@ func setupReconcilers(ctx context.Context, mgr manager.Manager) {
 	if enableRuntimeExtension {
 		setupLog.Info("enabling the in-place update runtime extension", "port", runtimeExtensionPort)
 
-		handler := inplace.NewHandler(mgr.GetClient(), inplace.NewNodeClient(mgr.GetClient()))
+		handler := inplace.NewHandler(mgr.GetClient(), mgr.GetAPIReader(), inplace.NewNodeClient(mgr.GetClient()))
 
 		if err := inplace.AddToManager(mgr, handler, inplace.Options{
 			Port:    runtimeExtensionPort,

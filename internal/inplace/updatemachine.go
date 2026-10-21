@@ -238,7 +238,7 @@ func respondRetry(resp *runtimehooksv1.UpdateMachineResponse, message string) {
 // freshness. The Machine's original installation seed remains bootstrap provenance only.
 func (h *Handler) desiredConfig(ctx context.Context, requested *clusterv1.Machine, bootstrapConfig runtimeRawExtension) ([]byte, bool, error) {
 	machine := &clusterv1.Machine{}
-	if err := h.client.Get(ctx, types.NamespacedName{Namespace: requested.Namespace, Name: requested.Name}, machine); err != nil {
+	if err := h.reader.Get(ctx, types.NamespacedName{Namespace: requested.Namespace, Name: requested.Name}, machine); err != nil {
 		return nil, false, fmt.Errorf("configuration input Machine: lookup failed")
 	}
 	ref := machine.Spec.Bootstrap.ConfigRef
@@ -246,7 +246,7 @@ func (h *Handler) desiredConfig(ctx context.Context, requested *clusterv1.Machin
 		return nil, false, fmt.Errorf("configuration input TalosConfig: association required")
 	}
 	config := &bootstrapv1beta1.TalosConfig{}
-	if err := h.client.Get(ctx, types.NamespacedName{Namespace: machine.Namespace, Name: ref.Name}, config); err != nil {
+	if err := h.reader.Get(ctx, types.NamespacedName{Namespace: machine.Namespace, Name: ref.Name}, config); err != nil {
 		return nil, false, fmt.Errorf("configuration input TalosConfig: lookup failed")
 	}
 	obj, err := rawToUnstructured(bootstrapConfig)
@@ -270,18 +270,18 @@ func (h *Handler) desiredConfig(ctx context.Context, requested *clusterv1.Machin
 	}
 	secret := &corev1.Secret{}
 	key := types.NamespacedName{Namespace: machine.Namespace, Name: config.Status.DataSecretName}
-	if err := h.client.Get(ctx, key, secret); err != nil {
+	if err := h.reader.Get(ctx, key, secret); err != nil {
 		return nil, false, fmt.Errorf("configuration input generated Secret: lookup failed")
 	}
 	cluster := &clusterv1.Cluster{}
-	if err := h.client.Get(ctx, types.NamespacedName{Namespace: machine.Namespace, Name: machine.Spec.ClusterName}, cluster); err != nil {
+	if err := h.reader.Get(ctx, types.NamespacedName{Namespace: machine.Namespace, Name: machine.Spec.ClusterName}, cluster); err != nil {
 		return nil, false, fmt.Errorf("configuration input Cluster: lookup failed")
 	}
 	image := ""
 	if config.Status.ImageFactory != nil {
 		image = config.Status.ImageFactory.InstallerImage
 	}
-	fresh, err := configinput.IsFresh(ctx, h.client, config, configinput.RenderContext{Machine: machine, Cluster: cluster, InstallerImage: image}, secret)
+	fresh, err := configinput.IsFresh(ctx, h.reader, config, configinput.RenderContext{Machine: machine, Cluster: cluster, InstallerImage: image}, secret)
 	if err != nil {
 		return nil, false, err
 	}
@@ -364,12 +364,12 @@ func imageTag(image string) string {
 func (h *Handler) machineEndpoints(ctx context.Context, machine *clusterv1.Machine) (bootstrapv1beta1.TalosEndpoint, error) {
 	live := &clusterv1.Machine{}
 	key := types.NamespacedName{Namespace: machine.Namespace, Name: machine.Name}
-	if err := h.client.Get(ctx, key, live); err != nil {
+	if err := h.reader.Get(ctx, key, live); err != nil {
 		return bootstrapv1beta1.TalosEndpoint{}, fmt.Errorf("configuration input Machine: endpoint lookup failed")
 	}
 	if ref := live.Spec.Bootstrap.ConfigRef; ref.IsDefined() {
 		config := &bootstrapv1beta1.TalosConfig{}
-		if err := h.client.Get(ctx, types.NamespacedName{Namespace: live.Namespace, Name: ref.Name}, config); err != nil {
+		if err := h.reader.Get(ctx, types.NamespacedName{Namespace: live.Namespace, Name: ref.Name}, config); err != nil {
 			return bootstrapv1beta1.TalosEndpoint{}, fmt.Errorf("configuration input TalosConfig: endpoint lookup failed")
 		}
 		if config.Spec.TalosEndpoint != nil {
