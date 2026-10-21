@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siderolabs/talos/pkg/machinery/config"
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +27,7 @@ import (
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 )
 
 // machineConfigWithImage renders a minimal but valid Talos machine configuration pinned to
@@ -161,14 +164,33 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "machine-1"},
 		Spec:       bootstrapv1beta1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.13"},
 	}
+	liveConfig.Status.DataSecretName = secret.Name
+	liveMachine.Spec = clusterv1.MachineSpec{ClusterName: cluster, Version: "v1.34.0", Bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To(secret.Name), ConfigRef: clusterv1.ContractVersionedObjectReference{APIGroup: bootstrapv1beta1.GroupVersion.Group, Kind: "TalosConfig", Name: liveConfig.Name}}}
+	liveCluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: cluster}, Spec: clusterv1.ClusterSpec{ControlPlaneEndpoint: clusterv1.APIEndpoint{Host: "192.168.1.1", Port: 6443}}}
 	if resolvedImage != "" {
 		liveConfig.Status.ImageFactory = &bootstrapv1beta1.ImageFactoryStatus{InstallerImage: resolvedImage}
 	}
 
 	handler := NewHandler(
-		fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig).Build(),
-		func(context.Context, types.NamespacedName, []string) (NodeClient, error) { return node, nil },
+		fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret, liveMachine, liveConfig, liveCluster).Build(),
+		func(context.Context, types.NamespacedName, bootstrapv1beta1.TalosEndpoint) (NodeClient, error) {
+			return node, nil
+		},
 	)
+	if secretHash != "stale-hash" {
+		inputs, err := configinput.Resolve(context.Background(), handler.client, liveConfig)
+		require.NoError(t, err)
+		bundle, err := secrets.NewBundle(secrets.NewFixedClock(time.Now()), config.TalosVersion1_13)
+		require.NoError(t, err)
+		rendered, err := configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster, InstallerImage: resolvedImage, SecretsBundle: bundle})
+		require.NoError(t, err)
+		if resolvedImage != "" && secretHash == freshHash(t) {
+			rendered, err = configinput.Render(inputs, configinput.RenderContext{Machine: liveMachine, Cluster: liveCluster, SecretsBundle: bundle})
+			require.NoError(t, err)
+		}
+		secret.Data[configinput.FreshnessKey] = rendered.Freshness()
+		require.NoError(t, handler.client.Update(context.Background(), secret))
+	}
 
 	machine := clusterv1.Machine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "machine-1"},

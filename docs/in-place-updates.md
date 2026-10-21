@@ -116,11 +116,17 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
    means in-place, anything left over means a rollout.
 3. On a match the owner stamps `update-in-progress` on the Machine, InfraMachine and
    TalosConfig, writes the desired specs, and marks `UpdateMachine` pending.
-4. CABPT's webhook admits the TalosConfig spec change because of that annotation, and
-   regenerates the bootstrap data secret, stamping a hash of the inputs on it.
-5. The core Machine controller polls `UpdateMachine`. The extension waits for that hash to
-   match the desired spec — otherwise it would apply the pre-update config and wrongly report
-   success — then applies the config and, if the installer image changed, upgrades Talos.
+4. CABPT's webhook admits the TalosConfig spec change because of that annotation.
+   The shared resolver/renderer regenerates its output Secret and stores resolved
+   input freshness privately in Secret data, including desired UID/generation and
+   referenced Secret identities. A same-name Secret rotation needs a requested
+   shared or Machine `configRevision`; rotation alone does not apply live drift.
+5. The core Machine controller polls `UpdateMachine`. The extension re-reads live
+   Machine/TalosConfig, waits for matching private freshness, and applies exactly
+   that output. A retained original Machine installation seed is never update
+   output. Inputs changing after apply cause intervention rather than stale success.
+   Explicit endpoints support separate dial/SNI/single-node proxy routing with
+   imported Talos mTLS. Baseline component version mismatches fail before apply.
 6. When the extension reports completion, Cluster API clears the annotations.
 
 Control plane machines are updated **one at a time**, and only while etcd is healthy across

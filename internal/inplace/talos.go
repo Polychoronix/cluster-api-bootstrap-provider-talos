@@ -10,10 +10,11 @@ import (
 
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
-	talosconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	endpointclient "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/talosclient"
 )
 
 // NodeClient is the slice of the Talos machine API that an in-place update needs.
@@ -43,58 +44,33 @@ type NodeClient interface {
 }
 
 // NodeClientFactory opens a NodeClient for the given machine.
-type NodeClientFactory func(ctx context.Context, clusterKey types.NamespacedName, endpoints []string) (NodeClient, error)
+type NodeClientFactory func(ctx context.Context, clusterKey types.NamespacedName, endpoint bootstrapv1beta1.TalosEndpoint) (NodeClient, error)
 
 // talosNodeClient is the gRPC-backed NodeClient.
 type talosNodeClient struct {
-	client  *talosclient.Client
-	upgrade upgradeClients
+	client   *talosclient.Client
+	upgrade  upgradeClients
+	endpoint bootstrapv1beta1.TalosEndpoint
 }
 
 // NewNodeClient builds a NodeClient for a machine using the cluster's talosconfig secret,
 // which CABPT maintains as <cluster>-talosconfig.
 func NewNodeClient(c client.Client) NodeClientFactory {
-	return func(ctx context.Context, clusterKey types.NamespacedName, endpoints []string) (NodeClient, error) {
-		if len(endpoints) == 0 {
-			return nil, fmt.Errorf("machine has no reachable addresses")
-		}
-
-		var secret corev1.Secret
-
-		key := types.NamespacedName{
-			Namespace: clusterKey.Namespace,
-			Name:      clusterKey.Name + "-talosconfig",
-		}
-
-		if err := c.Get(ctx, key, &secret); err != nil {
-			return nil, fmt.Errorf("failed to read talosconfig secret %s: %w", key, err)
-		}
-
-		cfg, err := talosconfig.FromBytes(secret.Data["talosconfig"])
+	return func(ctx context.Context, clusterKey types.NamespacedName, endpoint bootstrapv1beta1.TalosEndpoint) (NodeClient, error) {
+		tc, err := endpointclient.New(ctx, c, clusterKey, endpoint)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse talosconfig from secret %s: %w", key, err)
+			return nil, err
 		}
-
-		tc, err := talosclient.New(ctx,
-			talosclient.WithDefaultGRPCDialOptions(),
-			talosclient.WithEndpoints(endpoints...),
-			talosclient.WithConfig(cfg),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to Talos API: %w", err)
-		}
-
-		return &talosNodeClient{
-			client:  tc,
-			upgrade: upgradeClients{images: tc.ImageClient, lifecycle: tc.LifecycleClient, machine: tc.MachineClient},
-		}, nil
+		return &talosNodeClient{client: tc, endpoint: endpoint,
+			upgrade: upgradeClients{images: tc.ImageClient, lifecycle: tc.LifecycleClient, machine: tc.MachineClient}}, nil
 	}
 }
 
 func (t *talosNodeClient) Version(ctx context.Context) (string, error) {
+	ctx = endpointclient.WithNode(ctx, t.endpoint)
 	resp, err := t.client.Version(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to query Talos version: %w", err)
+		return "", fmt.Errorf("Talos version observation failed")
 	}
 
 	if len(resp.GetMessages()) == 0 {
@@ -105,6 +81,7 @@ func (t *talosNodeClient) Version(ctx context.Context) (string, error) {
 }
 
 func (t *talosNodeClient) ApplyConfig(ctx context.Context, data []byte) error {
+	ctx = endpointclient.WithNode(ctx, t.endpoint)
 	// AUTO lets Talos work out whether the change can be applied to the running system or
 	// needs a reboot. Deciding that here would mean reimplementing Talos' own knowledge of
 	// which config fields are hot-reloadable.
@@ -113,17 +90,19 @@ func (t *talosNodeClient) ApplyConfig(ctx context.Context, data []byte) error {
 		Mode: machineapi.ApplyConfigurationRequest_AUTO,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to apply machine configuration: %w", err)
+		return fmt.Errorf("Talos configuration apply failed")
 	}
 
 	return nil
 }
 
 func (t *talosNodeClient) Upgrade(ctx context.Context, image string) error {
+	ctx = endpointclient.WithNode(ctx, t.endpoint)
 	return lifecycleUpgrade(ctx, t.upgrade, image)
 }
 
 func (t *talosNodeClient) LegacyUpgrade(ctx context.Context, image string) error {
+	ctx = endpointclient.WithNode(ctx, t.endpoint)
 	// Nodes before Talos 1.13 serve only the machine service upgrade, which Talos 1.14
 	// deprecates; it is kept for them alone. The node performs the whole sequence itself.
 	_, err := t.client.Upgrade(ctx, image, false, false) //nolint:staticcheck // pre-1.13 nodes have nothing else

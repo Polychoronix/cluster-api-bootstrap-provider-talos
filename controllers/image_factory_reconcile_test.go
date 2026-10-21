@@ -135,9 +135,8 @@ func TestReconcileRendersTheResolvedInstallerImage(t *testing.T) {
 
 	secret := &corev1.Secret{}
 	require.NoError(t, f.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: cfg.Status.DataSecretName}, secret))
-	wantHash, err := bootstrapv1beta1.InPlaceConfigHash(cfg.Spec, "1.34.0", cfg.Status.ImageFactory.InstallerImage)
-	require.NoError(t, err)
-	assert.Equal(t, wantHash, secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation], "the hash must include the resolved image")
+	assert.NotContains(t, secret.Annotations, bootstrapv1beta1.InPlaceConfigHashAnnotation)
+	assert.Contains(t, string(secret.Data["inputFreshness"]), cfg.Status.ImageFactory.InstallerImage, "private freshness includes resolved image")
 }
 
 func TestReconcileWithoutImageFactoryBlockRendersNoImage(t *testing.T) {

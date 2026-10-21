@@ -163,6 +163,69 @@ spec:
     ...
 ```
 
+### Secret-backed configuration inputs
+
+Use `configSecretRef: {name: baseline, key: config}` for a complete Talos baseline,
+including every document. References are required, namespace-local Secret keys;
+no arbitrary namespace, filesystem path, or templated Secret name is accepted.
+The baseline bypasses generation and retains imported identity, networking and
+storage. It is mutually exclusive with public `data`. Use `generateType: none`,
+`worker` or `controlplane`; an explicit role must match the baseline.
+
+`strategicPatchSecretRefs` supplies an ordered list of private strategic patches.
+`machineConfig` supports a per-Machine `configSecretRef`, `configPatches`,
+`strategicPatches`, `strategicPatchSecretRefs` and `configRevision` without
+replacing shared patch policy. A Machine baseline replaces only the base.
+Patch precedence is shared public JSON, resolved installer image, shared public
+strategic/generated hostname, shared Secret patches, Machine public JSON and
+strategic patches, then Machine Secret patches. Talos strategic merging preserves
+unrelated documents/list entries. JSON6902 remains limited to single-document
+configuration, as required by Talos machinery; multi-document inputs fail safely.
+
+Keep private configuration in Secrets, never public `data`/patches or revisions.
+Changing an owner/template's non-secret `configRevision` triggers requested
+reconciliation after a same-name Secret rotation. Shared and Machine revisions
+are independent; public patch/version changes do not need an extra revision.
+Secret changes alone do not apply live drift. Generated Secret data contains
+private `inputFreshness` metadata binding desired objects and Secret UID/version
+identities; runtime updates use the live TalosConfig output rather than an
+adopted Machine's original installation seed. No resolved private digest is
+published on Machine/TalosConfig annotations or conditions. Existing MachinePool
+convergence annotations retain only the public spec/reference/revision token.
+
+Baseline-backed Kubernetes transitions require a reviewed baseline/patch whose
+kubelet and enabled control-plane component image version tags match the
+requested Machine version; mismatches fail before apply. Custom registry ports
+and version-tag-plus-digest images work; digest-only/opaque version tags cannot
+prove a target. Baseline import does not silently rewrite actual versions.
+
+### Explicit Talos management endpoints
+
+Set `talosEndpoint` on the per-Machine TalosConfig with `address: host:port`,
+`serverName: native-talos-hostname` and optional `node` for single-node proxy
+routing. Dial transport and verified TLS identity are independent; Kubernetes
+InternalIP/ExternalIP selection is not changed. `pkg/talosclient.New` uses the
+standard `<cluster>-talosconfig` Secret's `talosconfig` key with strict Talos mTLS;
+call routed RPCs with `pkg/talosclient.WithNode`. One client serves one endpoint.
+Clients use no ambient talosconfig, insecure maintenance mode or filesystem
+credentials. Ordinary provisioning retains its address fallback.
+
+Existing imported management identity Secrets remain read-only, including
+endpoints and ownership. Newly provider-created identity Secrets carry a
+creation-only provenance marker; matching Cluster owner/CA/bundle without that
+marker never authorizes takeover. Baseline CA extraction uses the exact imported
+issuing certificate/key; workers without an issuing key require imported mTLS
+credentials matching their accepted CA. Invalid/mismatching credentials fail
+without replacement. Runtime recovery/completion journals and guarded live
+adoption are separate integration work, not established by these input features.
+
+Local regression checks use real Talos-generated multi-document fixtures and
+in-memory mTLS gRPC RPCs. The optional disposable controller/admission/conversion
+smoke runs with an explicitly supplied `KUBEBUILDER_ASSETS` directory:
+`go test ./controllers -run '^TestConfigInputControllerDisposableEnvtest$'`.
+It starts its own API server/etcd and never uses an existing kubeconfig/cluster.
+
+
 ### Configuration Patches
 
 Machine configuration can be customized by applying configuration patches.
@@ -232,7 +295,8 @@ talosctl config merge cluster-talosconfig
 talosctl -n <IP> version
 ```
 
-CABPT updates endpoints in the `talosconfig` based on control plane `Machine` addresses.
+CABPT updates endpoints only for positively provider-created generated identity
+Secrets. Existing imported credentials/endpoints are validated and never rewritten.
 
 ### Operation
 
@@ -269,7 +333,7 @@ If CABPT fails to perform its operations, it stores error message for the respec
 Status:
   Conditions:
     Last Transition Time:  2021-10-25T20:54:09Z
-    Message:               failure applying rfc6902 patches to talos machine config: add operation does not apply: doc is missing path: "/machine/time/servers": missing value
+    Message:               configuration input shared public: JSON patch failed
     Reason:                DataSecretGenerationFailed
     Severity:              Error
     Status:                False

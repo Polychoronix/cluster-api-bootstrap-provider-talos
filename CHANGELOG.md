@@ -1,3 +1,17 @@
+## Unreleased CRACI integration changes
+
+- Add namespace-local complete configuration Secret baselines, ordered private
+  strategic patches, per-Machine overlays and explicit desired revisions in both
+  served APIs, conversions, deepcopies and CRDs.
+- Share complete-document rendering and private resolved-input freshness between
+  bootstrap and requested runtime updates; preserve original adoption seeds.
+- Preserve imported Talos mTLS identity and exact baseline CA, with creation-only
+  provider provenance rather than heuristic ownership takeover.
+- Add explicit dial address/TLS server name/single-node routing clients and real
+  in-memory mTLS RPC, API/schema, rotation and disposable controller smoke tests.
+- Lifecycle completion/recovery, guarded live adoption and matched release assets
+  remain separate integration milestones; no automatic physical cleanup added.
+
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 
 Welcome to the v0.7.0-alpha.2 release of CAPI Bootstrap Provider Talos!  

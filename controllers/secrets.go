@@ -5,6 +5,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -24,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 )
 
 func (r *TalosConfigReconciler) fetchSecret(ctx context.Context, config *bootstrapv1beta1.TalosConfig, secretName string) (*corev1.Secret, error) {
@@ -192,21 +194,49 @@ func (r *TalosConfigReconciler) rewritesBootstrapData(scope *TalosConfigScope) b
 // configHash is recorded on the secret so the in-place update extension, and the MachinePool
 // update loop, can distinguish a regenerated secret from one that still holds the pre-update
 // configuration.
-func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *TalosConfigScope, data []byte, configHash string) (string, error) {
+func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *TalosConfigScope, data []byte, configHash string, freshness ...[]byte) (string, error) {
 	ownerName := scope.ConfigOwner.GetName()
 	dataSecretName := ownerName + "-bootstrap-data"
+	var privateFreshness []byte
+	if len(freshness) > 0 {
+		privateFreshness = freshness[0]
+	}
+	if original := scope.ConfigOwner.DataSecretName(); original != nil && *original == dataSecretName {
+		seed, err := r.fetchSecret(ctx, scope.Config, *original)
+		if err != nil {
+			return "", fmt.Errorf("configuration input bootstrap provenance: lookup failed")
+		}
+		providerOwned := false
+		for _, ref := range seed.OwnerReferences {
+			if ref.Kind == "TalosConfig" && ref.UID == scope.Config.UID {
+				providerOwned = true
+			}
+		}
+		if !providerOwned {
+			dataSecretName = scope.Config.Name + "-update-data"
+		}
+	}
 
 	r.Log.Info("handling bootstrap data for ", "owner", ownerName)
 
 	existing, err := r.fetchSecret(ctx, scope.Config, dataSecretName)
 	if err == nil {
+		if len(privateFreshness) > 0 && !scope.ConfigOwner.IsMachinePool() {
+			owned := false
+			for _, ref := range existing.OwnerReferences {
+				if ref.Kind == "TalosConfig" && ref.UID == scope.Config.UID {
+					owned = true
+				}
+			}
+			if !owned {
+				return "", fmt.Errorf("configuration input generated Secret: ownership mismatch")
+			}
+		}
 		if !r.rewritesBootstrapData(scope) {
 			return dataSecretName, nil
 		}
 
-		if existing.Annotations != nil && existing.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] == configHash {
-			// Already regenerated for this desired spec; rewriting would only churn the
-			// resourceVersion on every reconcile while the update is in progress.
+		if len(privateFreshness) > 0 && bytes.Equal(existing.Data[configinput.FreshnessKey], privateFreshness) || len(privateFreshness) == 0 && existing.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] == configHash {
 			return dataSecretName, nil
 		}
 
@@ -217,9 +247,14 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			patched.Annotations = map[string]string{}
 		}
 
-		patched.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
-		patched.Data = map[string][]byte{
-			"value": data,
+		if len(privateFreshness) == 0 || scope.ConfigOwner.IsMachinePool() {
+			patched.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
+		} else {
+			delete(patched.Annotations, bootstrapv1beta1.InPlaceConfigHashAnnotation)
+		}
+		patched.Data = map[string][]byte{"value": data}
+		if len(privateFreshness) > 0 {
+			patched.Data[configinput.FreshnessKey] = privateFreshness
 		}
 
 		return dataSecretName, r.Client.Patch(ctx, patched, client.MergeFrom(existing))
@@ -236,9 +271,7 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			Labels: map[string]string{
 				capiv1.ClusterNameLabel: scope.Cluster.Name,
 			},
-			Annotations: map[string]string{
-				bootstrapv1beta1.InPlaceConfigHashAnnotation: configHash,
-			},
+			Annotations: map[string]string{},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(scope.Config, bootstrapv1beta1.GroupVersion.WithKind("TalosConfig")),
 			},
@@ -246,6 +279,12 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 		Data: map[string][]byte{
 			"value": data,
 		},
+	}
+	if len(privateFreshness) > 0 {
+		certSecret.Data[configinput.FreshnessKey] = privateFreshness
+	}
+	if len(privateFreshness) == 0 || scope.ConfigOwner.IsMachinePool() {
+		certSecret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
 	}
 
 	err = r.Client.Create(ctx, certSecret)
@@ -258,6 +297,28 @@ func (r *TalosConfigReconciler) reconcileClientConfig(ctx context.Context, log l
 	if !(scope.Config.Spec.GenerateType == talosmachine.TypeControlPlane.String() || scope.Config.Spec.GenerateType == talosmachine.TypeInit.String()) {
 		// can only reconcile for control plane machines
 		return nil
+	}
+	identity, identityErr := r.fetchSecret(ctx, scope.Config, scope.Cluster.Name+"-talosconfig")
+	if identityErr == nil {
+		ca, err := identityCA(identity)
+		if err != nil {
+			return err
+		}
+		if !providerCreatedIdentity(identity, scope) {
+			return nil
+		}
+		if scope.Config.Spec.ConfigSecretRef != nil || scope.Config.Spec.GenerateType == "none" || scope.Config.Spec.MachineConfig != nil && scope.Config.Spec.MachineConfig.ConfigSecretRef != nil {
+			return nil
+		}
+		bundle, err := r.getSecretsBundle(ctx, scope, false, defaultVersionContract)
+		if err != nil {
+			return identityError("generated bundle lookup")
+		}
+		if bundle.Certs == nil || bundle.Certs.OS == nil || !bytes.Equal(ca, bundle.Certs.OS.Crt) {
+			return identityError("generated bundle mismatch")
+		}
+	} else if !k8serrors.IsNotFound(identityErr) {
+		return identityError("lookup")
 	}
 
 	machines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, scope.Cluster, collections.ControlPlaneMachines(scope.Cluster.Name))
@@ -307,6 +368,7 @@ func (r *TalosConfigReconciler) reconcileClientConfig(ctx context.Context, log l
 				Labels: map[string]string{
 					capiv1.ClusterNameLabel: scope.Cluster.Name,
 				},
+				Annotations: map[string]string{identityCreatedAnnotation: identityCreatedValue},
 				OwnerReferences: []metav1.OwnerReference{
 					*metav1.NewControllerRef(scope.Cluster, capiv1.GroupVersion.WithKind("Cluster")),
 				},
