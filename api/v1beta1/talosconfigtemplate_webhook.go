@@ -63,6 +63,7 @@ func (r *TalosConfigTemplate) ValidateDelete(ctx context.Context, obj *TalosConf
 
 func (r *TalosConfigTemplate) validate() error {
 	allErrs := ValidateImageFactory(field.NewPath("spec", "template", "spec", "imageFactory"), r.Spec.Template.Spec.ImageFactory)
+	allErrs = append(allErrs, ValidateConfigInputs(field.NewPath("spec", "template", "spec"), r.Spec.Template.Spec)...)
 	if len(allErrs) == 0 {
 		return nil
 	}

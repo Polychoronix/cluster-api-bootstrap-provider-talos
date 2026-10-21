@@ -14,6 +14,8 @@ const (
 )
 
 // TalosConfigSpec defines the desired state of TalosConfig
+// +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || !has(self.data) || self.data == ”",message="data cannot be combined with a Secret baseline"
+// +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || self.generateType in ['none', 'controlplane', 'worker']",message="Secret baselines require none, controlplane or worker"
 type TalosConfigSpec struct {
 	// Version of Talos to generate machine configuration for, i.e. v1.0 (patch version may be omitted).
 	// Defaults to the latest supported version if unspecified.
@@ -28,10 +30,35 @@ type TalosConfigSpec struct {
 	// Machine configuration in case generateType=none.
 	Data string `json:"data,omitempty"`
 
+	// ConfigSecretRef supplies a complete baseline from a Secret in this object's namespace.
+	// It is mutually exclusive with Data and bypasses generation without changing the node's role.
+	// +optional
+	ConfigSecretRef *SecretKeyReference `json:"configSecretRef,omitempty"`
+
+	// StrategicPatchSecretRefs are applied in order after shared public patches.
+	// +listType=atomic
+	// +optional
+	StrategicPatchSecretRefs []SecretKeyReference `json:"strategicPatchSecretRefs,omitempty"`
+
+	// ConfigRevision requests reconciliation after a same-name input Secret changes.
+	// This is a non-secret revision; never put configuration or credentials here.
+	// +optional
+	ConfigRevision string `json:"configRevision,omitempty"`
+
+	// MachineConfig retains per-node baseline and overlays without replacing shared patches.
+	// +optional
+	MachineConfig *MachineConfigOverlay `json:"machineConfig,omitempty"`
+
+	// TalosEndpoint separates management transport from Kubernetes node addresses.
+	// +optional
+	TalosEndpoint *TalosEndpoint `json:"talosEndpoint,omitempty"`
+
 	// RFC6902 JSON patches to apply to machine configuration.
+	// +listType=atomic
 	ConfigPatches []ConfigPatches `json:"configPatches,omitempty"`
 
 	// Talos Linux machine configuration strategic merge patch list.
+	// +listType=atomic
 	StrategicPatches []string `json:"strategicPatches,omitempty"`
 
 	// Set hostname in the machine configuration to some value.

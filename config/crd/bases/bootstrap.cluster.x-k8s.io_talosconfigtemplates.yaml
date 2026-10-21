@@ -62,6 +62,32 @@ spec:
                           - path
                           type: object
                         type: array
+                        x-kubernetes-list-type: atomic
+                      configRevision:
+                        description: ConfigRevision requests reconciliation after
+                          a same-name input Secret changes.
+                        type: string
+                      configSecretRef:
+                        description: ConfigSecretRef supplies a complete namespace-local
+                          baseline instead of Data.
+                        properties:
+                          key:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[-._a-zA-Z0-9]+$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: must not be '.' or start with '..'
+                              rule: self != '.' && !self.startsWith('..')
+                          name:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
                       data:
                         type: string
                       generateType:
@@ -79,17 +105,141 @@ spec:
                               "InfrastructureName" (use linked Machine's infrastructure's name).
                             type: string
                         type: object
+                      machineConfig:
+                        description: MachineConfig retains per-node configuration
+                          without replacing shared patches.
+                        properties:
+                          configPatches:
+                            items:
+                              properties:
+                                op:
+                                  type: string
+                                path:
+                                  type: string
+                                value:
+                                  x-kubernetes-preserve-unknown-fields: true
+                              required:
+                              - op
+                              - path
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          configRevision:
+                            type: string
+                          configSecretRef:
+                            description: SecretKeyReference selects required data
+                              in a Secret in the TalosConfig's namespace.
+                            properties:
+                              key:
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[-._a-zA-Z0-9]+$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: must not be '.' or start with '..'
+                                  rule: self != '.' && !self.startsWith('..')
+                              name:
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                          strategicPatchSecretRefs:
+                            items:
+                              description: SecretKeyReference selects required data
+                                in a Secret in the TalosConfig's namespace.
+                              properties:
+                                key:
+                                  maxLength: 253
+                                  minLength: 1
+                                  pattern: ^[-._a-zA-Z0-9]+$
+                                  type: string
+                                  x-kubernetes-validations:
+                                  - message: must not be '.' or start with '..'
+                                    rule: self != '.' && !self.startsWith('..')
+                                name:
+                                  maxLength: 253
+                                  minLength: 1
+                                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          strategicPatches:
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
+                      strategicPatchSecretRefs:
+                        description: StrategicPatchSecretRefs are ordered namespace-local
+                          private patches.
+                        items:
+                          description: SecretKeyReference selects required data in
+                            a Secret in the TalosConfig's namespace.
+                          properties:
+                            key:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[-._a-zA-Z0-9]+$
+                              type: string
+                              x-kubernetes-validations:
+                              - message: must not be '.' or start with '..'
+                                rule: self != '.' && !self.startsWith('..')
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
                       strategicPatches:
                         description: Talos Linux machine configuration strategic merge
                           patch list.
                         items:
                           type: string
                         type: array
+                        x-kubernetes-list-type: atomic
+                      talosEndpoint:
+                        description: TalosEndpoint separates transport from Kubernetes
+                          node addresses.
+                        properties:
+                          address:
+                            minLength: 1
+                            type: string
+                          node:
+                            type: string
+                          serverName:
+                            minLength: 1
+                            type: string
+                        required:
+                        - address
+                        - serverName
+                        type: object
                       talosVersion:
                         type: string
                     required:
                     - generateType
                     type: object
+                    x-kubernetes-validations:
+                    - message: data cannot be combined with a Secret baseline
+                      rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
+                        && has(self.machineConfig.configSecretRef))) || !has(self.data)
+                        || self.data == '''''
+                    - message: Secret baselines require none, controlplane or worker
+                      rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
+                        && has(self.machineConfig.configSecretRef))) || self.generateType
+                        in [''none'', ''controlplane'', ''worker'']'
                 type: object
             required:
             - template
@@ -185,6 +335,34 @@ spec:
                           - path
                           type: object
                         type: array
+                        x-kubernetes-list-type: atomic
+                      configRevision:
+                        description: |-
+                          ConfigRevision requests reconciliation after a same-name input Secret changes.
+                          This is a non-secret revision; never put configuration or credentials here.
+                        type: string
+                      configSecretRef:
+                        description: |-
+                          ConfigSecretRef supplies a complete baseline from a Secret in this object's namespace.
+                          It is mutually exclusive with Data and bypasses generation without changing the node's role.
+                        properties:
+                          key:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[-._a-zA-Z0-9]+$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: must not be '.' or start with '..'
+                              rule: self != '.' && !self.startsWith('..')
+                          name:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
                       data:
                         description: Machine configuration in case generateType=none.
                         type: string
@@ -256,12 +434,137 @@ spec:
                             - name
                             type: object
                         type: object
+                      machineConfig:
+                        description: MachineConfig retains per-node baseline and overlays
+                          without replacing shared patches.
+                        properties:
+                          configPatches:
+                            items:
+                              properties:
+                                op:
+                                  type: string
+                                path:
+                                  type: string
+                                value:
+                                  x-kubernetes-preserve-unknown-fields: true
+                              required:
+                              - op
+                              - path
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          configRevision:
+                            description: ConfigRevision is independent of the shared
+                              revision and contains no private data.
+                            type: string
+                          configSecretRef:
+                            description: ConfigSecretRef replaces only the base, never
+                              shared patches.
+                            properties:
+                              key:
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[-._a-zA-Z0-9]+$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: must not be '.' or start with '..'
+                                  rule: self != '.' && !self.startsWith('..')
+                              name:
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                          strategicPatchSecretRefs:
+                            items:
+                              description: |-
+                                SecretKeyReference selects required data in a Secret in the TalosConfig's namespace.
+                                Neither arbitrary namespaces nor templated names or filesystem paths are supported.
+                              properties:
+                                key:
+                                  maxLength: 253
+                                  minLength: 1
+                                  pattern: ^[-._a-zA-Z0-9]+$
+                                  type: string
+                                  x-kubernetes-validations:
+                                  - message: must not be '.' or start with '..'
+                                    rule: self != '.' && !self.startsWith('..')
+                                name:
+                                  maxLength: 253
+                                  minLength: 1
+                                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          strategicPatches:
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
+                      strategicPatchSecretRefs:
+                        description: StrategicPatchSecretRefs are applied in order
+                          after shared public patches.
+                        items:
+                          description: |-
+                            SecretKeyReference selects required data in a Secret in the TalosConfig's namespace.
+                            Neither arbitrary namespaces nor templated names or filesystem paths are supported.
+                          properties:
+                            key:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[-._a-zA-Z0-9]+$
+                              type: string
+                              x-kubernetes-validations:
+                              - message: must not be '.' or start with '..'
+                                rule: self != '.' && !self.startsWith('..')
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
                       strategicPatches:
                         description: Talos Linux machine configuration strategic merge
                           patch list.
                         items:
                           type: string
                         type: array
+                        x-kubernetes-list-type: atomic
+                      talosEndpoint:
+                        description: TalosEndpoint separates management transport
+                          from Kubernetes node addresses.
+                        properties:
+                          address:
+                            description: Address is an explicit host:port, with bracketed
+                              IPv6 when applicable.
+                            minLength: 1
+                            type: string
+                          node:
+                            description: Node identifies a single target when the
+                              endpoint is an aggregated Talos proxy.
+                            type: string
+                          serverName:
+                            description: ServerName is the certificate verification/SNI
+                              name without a port.
+                            minLength: 1
+                            type: string
+                        required:
+                        - address
+                        - serverName
+                        type: object
                       talosVersion:
                         description: |-
                           Version of Talos to generate machine configuration for, i.e. v1.0 (patch version may be omitted).
@@ -271,6 +574,15 @@ spec:
                     required:
                     - generateType
                     type: object
+                    x-kubernetes-validations:
+                    - message: data cannot be combined with a Secret baseline
+                      rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
+                        && has(self.machineConfig.configSecretRef))) || !has(self.data)
+                        || self.data == '''''
+                    - message: Secret baselines require none, controlplane or worker
+                      rule: '!(has(self.configSecretRef) || (has(self.machineConfig)
+                        && has(self.machineConfig.configSecretRef))) || self.generateType
+                        in [''none'', ''controlplane'', ''worker'']'
                 type: object
             required:
             - template
