@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	machineryconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -113,7 +114,15 @@ func Resolve(ctx context.Context, reader client.Reader, config *bootstrapv1.Talo
 		if err := reader.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: clusterName + "-talos"}, secret); err != nil {
 			return nil, failure("generation identity", "lookup")
 		}
-		bundle, err := generationBundle(secret)
+		contract := machineryconfig.TalosVersionCurrent
+		if config.Spec.TalosVersion != "" {
+			var err error
+			contract, err = machineryconfig.ParseContractFromVersion(config.Spec.TalosVersion)
+			if err != nil {
+				return nil, failure("TalosConfig", "version contract")
+			}
+		}
+		bundle, err := DecodeGenerationSecret(secret, contract)
 		if err != nil {
 			return nil, err
 		}

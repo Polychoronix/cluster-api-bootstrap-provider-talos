@@ -191,6 +191,8 @@ func TestGeneratedCreationMarkerPermitsMatchingIdentityManagement(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, f.reconciler.reconcileClientConfig(context.Background(), f.reconciler.Log, scope))
 	identity := f.secret(t, testClusterName+"-talosconfig")
+	identity.UID = "generated-identity-uid"
+	require.NoError(t, f.client.Update(context.Background(), identity))
 	assert.Equal(t, identityCreatedValue, identity.Annotations[identityCreatedAnnotation])
 	assert.True(t, providerCreatedIdentity(identity, scope))
 	ca, err := talosclient.ValidateIdentity(identity.Data["talosconfig"])
