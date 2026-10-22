@@ -15,9 +15,12 @@ import (
 const (
 	JournalKey                 = "journal"
 	ReceiptKey                 = "receipt"
+	ConsumedReceiptKey         = "consumedReceipt"
+	LastReceiptKey             = "lastReceipt"
 	OwnerIntentKey             = "ownerIntent"
 	OwnerIntentVersion         = "v1"
-	OwnerIntentProvenanceValue = "cACPPT"
+	SchemaVersion              = "v1"
+	OwnerIntentProvenanceValue = "cacppt"
 	AcceptedIntentKey          = "acceptedIntent"
 	OwnerPlanNameAnnotation    = "bootstrap.cluster.x-k8s.io/update-plan-secret"
 	OwnerPlanUIDAnnotation     = "bootstrap.cluster.x-k8s.io/update-plan-uid"
@@ -97,6 +100,7 @@ type AcceptedIntent struct {
 	TransactionID  string        `json:"transactionID,omitempty"`
 }
 type Journal struct {
+	Version                  string                       `json:"version"`
 	TransactionID            string                       `json:"transactionID"`
 	Machine                  ObjectIdentity               `json:"machine"`
 	TalosConfig              ObjectIdentity               `json:"talosConfig"`
@@ -118,6 +122,7 @@ type Journal struct {
 	CompletedAt              *metav1.Time                 `json:"completedAt,omitempty"`
 }
 type CompletionReceipt struct {
+	Version           string      `json:"version"`
 	TransactionID     string      `json:"transactionID"`
 	MachineUID        types.UID   `json:"machineUID"`
 	TalosConfigUID    types.UID   `json:"talosConfigUID"`

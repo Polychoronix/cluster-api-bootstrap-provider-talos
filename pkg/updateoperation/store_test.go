@@ -28,6 +28,7 @@ const storePrivateSentinel = "private-configuration-and-parser-cause"
 
 func operationJournal() *updateoperation.Journal {
 	return &updateoperation.Journal{
+		Version:        updateoperation.SchemaVersion,
 		TransactionID:  "transaction-one",
 		Machine:        updateoperation.ObjectIdentity{APIGroup: "cluster.x-k8s.io", Kind: "Machine", Name: "machine", UID: "machine-uid"},
 		TalosConfig:    updateoperation.ObjectIdentity{APIGroup: "bootstrap.cluster.x-k8s.io", Kind: "TalosConfig", Name: "config", UID: "config-uid"},
@@ -40,6 +41,7 @@ func operationJournal() *updateoperation.Journal {
 
 func operationReceipt(j *updateoperation.Journal) *updateoperation.CompletionReceipt {
 	return &updateoperation.CompletionReceipt{TransactionID: j.TransactionID, MachineUID: j.Machine.UID,
+		Version:        updateoperation.SchemaVersion,
 		TalosConfigUID: j.TalosConfig.UID, InfrastructureUID: j.Infrastructure.UID,
 		InputFreshness: append([]byte(nil), j.InputFreshness...), Phase: updateoperation.Observed,
 		CompletedAt: metav1.NewTime(time.Date(2026, 10, 21, 12, 0, 0, 0, time.Local))}
@@ -148,6 +150,8 @@ func TestReadReceiptRequiresExactObservedIdentity(t *testing.T) {
 	j := operationJournal()
 	s := operationSecret(t, j)
 	want := operationReceipt(j)
+	completeJournal(j, want.CompletedAt)
+	s.Data[updateoperation.JournalKey] = encodedOperation(t, j)
 	s.Data[updateoperation.ReceiptKey] = encodedOperation(t, want)
 	got, err := updateoperation.ReadReceipt(context.Background(), operationClient(t, s), "tenant", j.TalosConfig, j.TransactionID)
 	require.NoError(t, err)
@@ -221,8 +225,7 @@ func TestWriteJournalUsesUIDAndResourceVersionJSONPatch(t *testing.T) {
 	j.Phase = updateoperation.Observed
 	r := operationReceipt(j)
 	j.CompletedAt = &r.CompletedAt
-	j.Steps[0].Phase = updateoperation.StepObserved
-	j.Steps[0].ApplyOutcome = updateoperation.NoReboot
+	completeJournal(j, r.CompletedAt)
 	before := s.DeepCopy()
 	require.NoError(t, updateoperation.WriteJournal(context.Background(), c, s, j, r))
 	assert.Equal(t, types.JSONPatchType, c.patchType)
@@ -413,4 +416,21 @@ func TestReadReceiptRejectsEmptyRequestedTransaction(t *testing.T) {
 	s.Data[updateoperation.ReceiptKey] = encodedOperation(t, r)
 	_, err := updateoperation.ReadReceipt(context.Background(), operationClient(t, s), "tenant", j.TalosConfig, "")
 	requireSafeOperationError(t, err)
+}
+
+func completeJournal(j *updateoperation.Journal, at metav1.Time) {
+	j.Phase = updateoperation.Observed
+	j.CompletedAt = &at
+	issued := metav1.NewTime(at.Add(-time.Minute))
+	deadline := metav1.NewTime(at.Add(time.Minute))
+	for i := range j.Steps {
+		j.Steps[i].Phase = updateoperation.StepObserved
+		j.Steps[i].IssuerID = "issuer"
+		j.Steps[i].IssuedAt = &issued
+		j.Steps[i].Deadline = &deadline
+		j.Steps[i].IssuedBootID = "boot"
+		if j.Steps[i].Kind == updateoperation.Apply {
+			j.Steps[i].ApplyOutcome = updateoperation.NoReboot
+		}
+	}
 }

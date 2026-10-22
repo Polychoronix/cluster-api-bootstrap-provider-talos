@@ -31,7 +31,8 @@ func ownerOperationIntent() *updateoperation.OwnerPlanIntent {
 
 func ownerOperationSecret(t *testing.T, intent *updateoperation.OwnerPlanIntent) *corev1.Secret {
 	t.Helper()
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "owner-plan", UID: "owner-plan-uid", Annotations: map[string]string{updateoperation.ProvenanceAnnotation: updateoperation.OwnerIntentProvenanceValue}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "controlplane.cluster.x-k8s.io/v1beta1", Kind: intent.Owner.Kind, Name: intent.Owner.Name, UID: intent.Owner.UID}}},
+	controller := true
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "owner-plan", UID: "owner-plan-uid", Annotations: map[string]string{updateoperation.ProvenanceAnnotation: updateoperation.OwnerIntentProvenanceValue}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "controlplane.cluster.x-k8s.io/v1beta1", Kind: intent.Owner.Kind, Name: intent.Owner.Name, UID: intent.Owner.UID, Controller: &controller}}},
 		Data: map[string][]byte{updateoperation.OwnerIntentKey: encodedOperation(t, intent)}}
 }
 
@@ -134,7 +135,7 @@ func TestCompletionReceiptRoundTripDoesNotPublishConfigurationOrImage(t *testing
 	assert.Equal(t, *want, got)
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(encoded, &fields))
-	assert.Len(t, fields, 7)
+	assert.Len(t, fields, 8)
 	for _, key := range []string{"transactionID", "machineUID", "talosConfigUID", "infrastructureUID", "inputFreshness", "phase", "completedAt"} {
 		assert.Contains(t, fields, key)
 	}

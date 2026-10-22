@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -37,7 +38,7 @@ func validateOwner(s *corev1.Secret, config ObjectIdentity) bool {
 	return false
 }
 func validReceipt(r *CompletionReceipt) bool {
-	return r != nil && r.TransactionID != "" && r.MachineUID != "" && r.TalosConfigUID != "" && r.InfrastructureUID != "" && r.Phase == Observed && len(r.InputFreshness) > 0 && !r.CompletedAt.IsZero()
+	return r != nil && r.Version == SchemaVersion && r.TransactionID != "" && r.MachineUID != "" && r.TalosConfigUID != "" && r.InfrastructureUID != "" && r.Phase == Observed && len(r.InputFreshness) > 0 && !r.CompletedAt.IsZero()
 }
 func ReadReceipt(ctx context.Context, reader client.Reader, namespace string, config ObjectIdentity, transactionID string) (*CompletionReceipt, error) {
 	s := &corev1.Secret{}
@@ -50,6 +51,10 @@ func ReadReceipt(ctx context.Context, reader client.Reader, namespace string, co
 	r := &CompletionReceipt{}
 	if json.Unmarshal(s.Data[ReceiptKey], r) != nil || !validReceipt(r) || transactionID == "" || r.TransactionID != transactionID || r.TalosConfigUID != config.UID {
 		return nil, safe("receipt identity")
+	}
+	j := &Journal{}
+	if json.Unmarshal(s.Data[JournalKey], j) != nil || validateJournal(j) != nil || !receiptMatches(r, j) {
+		return nil, safe("receipt journal mismatch")
 	}
 	return r, nil
 }
@@ -73,7 +78,7 @@ func ReadOwnerIntent(ctx context.Context, reader client.Reader, namespace string
 	}
 	found := false
 	for _, o := range s.OwnerReferences {
-		if o.Name == i.Owner.Name && o.Kind == i.Owner.Kind && o.UID == i.Owner.UID {
+		if o.Name == i.Owner.Name && o.Kind == i.Owner.Kind && o.UID == i.Owner.UID && o.APIVersion == i.Owner.APIGroup+"/v1beta1" && o.Controller != nil && *o.Controller {
 			found = true
 		}
 	}
@@ -98,11 +103,14 @@ func ReadJournal(ctx context.Context, reader client.Reader, namespace string, co
 	if json.Unmarshal(s.Data[JournalKey], j) != nil || j.TalosConfig.UID != config.UID || j.TransactionID == "" {
 		return nil, nil, safe("journal decode")
 	}
+	if err := validateJournal(j); err != nil {
+		return nil, nil, err
+	}
 	return s, j, nil
 }
 func CreateJournal(ctx context.Context, c client.Client, namespace string, j *Journal) (*corev1.Secret, error) {
-	if j == nil || j.TransactionID == "" || !validIdentity(j.Machine) || !validIdentity(j.TalosConfig) || !validIdentity(j.Infrastructure) || j.NodeUID == "" || j.NodeProviderID == "" || len(j.InputFreshness) == 0 {
-		return nil, safe("journal initial identity")
+	if err := validateJournal(j); err != nil {
+		return nil, err
 	}
 	data, e := json.Marshal(j)
 	if e != nil {
@@ -132,9 +140,12 @@ func WriteJournal(ctx context.Context, c client.Client, s *corev1.Secret, j *Jou
 		if r != nil {
 			return safe("unconsumed receipt overwrite")
 		}
-		if old.TransactionID != j.TransactionID {
-			return safe("unconsumed transaction")
+		if !reflect.DeepEqual(old, j) {
+			return safe("receipted journal immutable")
 		}
+	}
+	if err := validateTransition(old, j); err != nil {
+		return err
 	}
 	if r != nil && !receiptMatches(r, j) {
 		return safe("receipt journal mismatch")
