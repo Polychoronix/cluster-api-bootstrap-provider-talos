@@ -11,8 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	kubernetesScheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,10 +35,7 @@ type imageFactoryFixture struct {
 func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec, factory *fakeFactory) *imageFactoryFixture {
 	t.Helper()
 
-	scheme := runtime.NewScheme()
-	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, capiv1.AddToScheme(scheme))
-	require.NoError(t, bootstrapv1beta1.AddToScheme(scheme))
+	scheme := kubernetesScheme.Scheme
 
 	const owner = "machine-1"
 

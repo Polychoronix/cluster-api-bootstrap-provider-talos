@@ -19,6 +19,9 @@
   gate control-plane receipts on complete healthy voting etcd views and API health.
 - Add actual isolated core/runtime URL/mTLS/COSI/Lifecycle chain and Registrar CA
   tests; legacy OS compatibility and reviewed live adoption remain explicit gates.
+- Register typed CRDs in the production manager scheme and grant read-only lineage
+  lookup permissions; verify initial complete-config rendering using a token-only
+  service account with denied-before/granted-after RBAC, not admin-only fixtures.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

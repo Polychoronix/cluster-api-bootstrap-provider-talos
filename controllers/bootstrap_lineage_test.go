@@ -37,7 +37,6 @@ func TestFreshSecretBaselineFreezesInitialIntentAndRetainsItOnRequest(t *testing
 	cfg.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(machine, clusterv1.GroupVersion.WithKind("Machine"))}
 	cfg.Annotations = map[string]string{clusterv1.TemplateClonedFromNameAnnotation: "baseline-template", clusterv1.TemplateClonedFromGroupKindAnnotation: (schema.GroupKind{Group: bootstrapv1.GroupVersion.Group, Kind: "TalosConfigTemplate"}).String()}
 	require.NoError(t, f.client.Update(context.Background(), cfg))
-	require.NoError(t, apiextensionsv1.AddToScheme(f.reconciler.Scheme))
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: "metalmachines.infra.test"}, Spec: apiextensionsv1.CustomResourceDefinitionSpec{Group: "infra.test", Names: apiextensionsv1.CustomResourceDefinitionNames{Kind: "MetalMachine"}, Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1beta1", Served: true, Storage: true}}}}
 	require.NoError(t, f.client.Create(t.Context(), crd))
 	infra := &unstructured.Unstructured{}
