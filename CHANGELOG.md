@@ -22,6 +22,9 @@
 - Register typed CRDs in the production manager scheme and grant read-only lineage
   lookup permissions; verify initial complete-config rendering using a token-only
   service account with denied-before/granted-after RBAC, not admin-only fixtures.
+- Hold recognized fresh CP bootstrap before seed publication while core transfers
+  InfraMachine ownership after bootstrap reconciliation; never retroactively
+  create accepted intent on an already published seed.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

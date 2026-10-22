@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
@@ -14,6 +15,8 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var errInitialBootstrapLineagePending = errors.New("initial bootstrap is waiting for infrastructure ownership transfer")
 
 // initialBootstrapLineage verifies controller-created initial CAPI bootstrap
 // provenance. It is not a claim that a physical server is newly provisioned.

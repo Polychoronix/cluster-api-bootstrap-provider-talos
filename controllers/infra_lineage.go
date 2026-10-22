@@ -46,10 +46,22 @@ func (r *TalosConfigReconciler) initialInfraLineage(ctx context.Context, m *clus
 	}
 	controller := metav1.GetControllerOf(infra)
 	if controller != nil && controller.UID == m.UID && controller.Kind == "Machine" && controller.Name == m.Name {
-		return true, nil
+		gv, err := schema.ParseGroupVersion(controller.APIVersion)
+		if err == nil && gv.Group == clusterv1.GroupVersion.Group {
+			return true, nil
+		}
+		return false, nil
 	}
-	if controller != nil && controller.UID == owner.UID && controller.Kind == owner.Kind && controller.Name == owner.Name && controller.APIVersion == owner.APIVersion {
-		return true, nil
+	if controller != nil {
+		return false, nil
+	}
+	for _, ref := range infra.GetOwnerReferences() {
+		if ref.UID == owner.UID && ref.Name == owner.Name && ref.Kind == owner.Kind && ref.APIVersion == owner.APIVersion {
+			// Core reconciles bootstrap before infrastructure; exact creator lineage
+			// can be recognized while Machine ownership transfer is pending.
+			// This is wait evidence only, never permission to initialize intent.
+			return false, errInitialBootstrapLineagePending
+		}
 	}
 	return false, nil
 }
