@@ -225,8 +225,11 @@ creation-only provenance marker; matching Cluster owner/CA/bundle without that
 marker never authorizes takeover. Baseline CA extraction uses the exact imported
 issuing certificate/key; workers without an issuing key require imported mTLS
 credentials matching their accepted CA. Invalid/mismatching credentials fail
-without replacement. Runtime recovery/completion journals and guarded live
-adoption are separate integration work, not established by these input features.
+without replacement. Requested updates use private durable operation journals and
+observed completion receipts; see [in-place updates](docs/in-place-updates.md).
+Fresh initial CAPI bootstrap lineage supports full Secret baselines, while
+existing seed/pivot/adoption requires separately reviewed observation/activation.
+Legacy OS compatibility and real Service/hardware rollout remain explicit gates.
 
 Local regression checks use real Talos-generated multi-document fixtures and
 in-memory mTLS gRPC RPCs. The optional disposable controller/admission/conversion

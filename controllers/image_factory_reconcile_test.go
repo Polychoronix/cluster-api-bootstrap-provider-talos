@@ -54,7 +54,7 @@ func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec,
 		},
 		&bootstrapv1beta1.TalosConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: owner, Namespace: testNamespace,
+				Name: owner, Namespace: testNamespace, UID: "config-uid",
 				OwnerReferences: []metav1.OwnerReference{{APIVersion: capiv1.GroupVersion.String(), Kind: "Machine", Name: owner, UID: "owner-uid"}},
 			},
 			Spec: spec,

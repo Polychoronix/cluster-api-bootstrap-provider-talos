@@ -49,13 +49,14 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "machine-1",
 			Namespace:   "default",
+			UID:         "config-uid",
 			Annotations: annotations,
 		},
 		Spec: bootstrapv1beta1.TalosConfigSpec{GenerateType: "worker"},
 	}
 
 	machine := &capiv1.Machine{
-		ObjectMeta: metav1.ObjectMeta{Name: "machine-1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "machine-1", Namespace: "default", UID: "machine-uid"},
 		Spec:       capiv1.MachineSpec{ClusterName: "test", Version: "v1.34.0"},
 	}
 
@@ -81,7 +82,7 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 
 func existingSecret(data, hash string) *corev1.Secret {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: bootstrapSecretName, OwnerReferences: []metav1.OwnerReference{{Kind: "TalosConfig", UID: ""}}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: bootstrapSecretName, OwnerReferences: []metav1.OwnerReference{{Kind: "TalosConfig", UID: "config-uid"}}},
 		Data:       map[string][]byte{"value": []byte(data), "inputFreshness": []byte(hash)},
 	}
 
@@ -105,6 +106,7 @@ func TestWriteBootstrapData_CreatesSecretWithHash(t *testing.T) {
 	t.Parallel()
 
 	r, scope := newSecretsScope(t, false, nil)
+	scope.Config.Annotations = map[string]string{capiv1.UpdateInProgressAnnotation: ""}
 
 	name, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v1"), "hash-1", []byte("hash-1"))
 	require.NoError(t, err)

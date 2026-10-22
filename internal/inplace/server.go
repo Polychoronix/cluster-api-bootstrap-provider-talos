@@ -27,18 +27,18 @@ type runtimeRawExtension = runtime.RawExtension
 type Handler struct {
 	client        client.Client
 	reader        client.Reader
-	newNodeClient NodeClientFactory
-	upgrades      *upgradeTracker
+	newNodeClient OperationNodeFactory
+	runner        *operationRunner
 }
 
 // NewHandler separates write access from the uncached reader used for operation guards.
 // Production callers must pass manager.GetAPIReader, not the reconcile cache.
-func NewHandler(c client.Client, reader client.Reader, factory NodeClientFactory) *Handler {
+func NewHandler(c client.Client, reader client.Reader, factory OperationNodeFactory) *Handler {
 	return &Handler{
 		client:        c,
 		reader:        reader,
 		newNodeClient: factory,
-		upgrades:      newUpgradeTracker(),
+		runner:        newOperationRunner(),
 	}
 }
 
@@ -60,6 +60,9 @@ type Options struct {
 // Cluster API reaches these hooks through an ExtensionConfig pointing at this server; see
 // config/runtime-extension for the manifests.
 func AddToManager(mgr manager.Manager, handler *Handler, opts Options) error {
+	if err := mgr.Add(handler); err != nil {
+		return err
+	}
 	catalog := runtimecatalog.New()
 	if err := runtimehooksv1.AddToCatalog(catalog); err != nil {
 		return fmt.Errorf("failed to build runtime hook catalog: %w", err)

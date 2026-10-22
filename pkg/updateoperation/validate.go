@@ -4,6 +4,7 @@
 package updateoperation
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"reflect"
 )
 
@@ -28,6 +29,20 @@ func validateJournal(j *Journal) error {
 	}
 	if j.Phase != Planned && j.Phase != Observed && j.Phase != Ambiguous {
 		return safe("journal phase")
+	}
+	if len(j.ControlPlane) > 0 {
+		if len(j.OriginalEtcdMembers) != len(j.ControlPlane) {
+			return safe("journal original controlplane membership missing")
+		}
+		ids := map[uint64]bool{}
+		names := map[string]bool{}
+		for _, member := range j.OriginalEtcdMembers {
+			if member.MemberID == 0 || member.Hostname == "" || ids[member.MemberID] || names[member.Hostname] {
+				return safe("journal original etcd identity invalid")
+			}
+			ids[member.MemberID] = true
+			names[member.Hostname] = true
+		}
 	}
 	seen := map[OperationKind]bool{}
 	for _, s := range j.Steps {
@@ -99,12 +114,25 @@ func validateTransition(old, next *Journal) error {
 		if a.Kind != b.Kind || stepRank(b.Phase) < stepRank(a.Phase) || a.Phase == StepAmbiguous && !reflect.DeepEqual(a, b) {
 			return safe("journal step regression")
 		}
-		if a.Phase != StepPlanned && (a.IssuerID != b.IssuerID || !reflect.DeepEqual(a.IssuedAt, b.IssuedAt) || !reflect.DeepEqual(a.Deadline, b.Deadline) || a.IssuedBootID != b.IssuedBootID) {
+		if a.Phase != StepPlanned && (a.IssuerID != b.IssuerID || !sameTime(a.IssuedAt, b.IssuedAt) || !sameTime(a.Deadline, b.Deadline) || a.IssuedBootID != b.IssuedBootID) {
 			return safe("journal issuer changed")
 		}
 		if a.ApplyOutcome != Unknown && a.ApplyOutcome != b.ApplyOutcome || a.PulledImageName != "" && a.PulledImageName != b.PulledImageName || a.PulledImageDigest != "" && a.PulledImageDigest != b.PulledImageDigest || a.InstallExitCode != nil && !reflect.DeepEqual(a.InstallExitCode, b.InstallExitCode) {
 			return safe("journal acknowledgment changed")
 		}
+		if a.ObservedBootID != "" && a.ObservedBootID != b.ObservedBootID {
+			return safe("journal observed boot witness changed")
+		}
+		if a.Phase == StepObserved && !reflect.DeepEqual(a, b) {
+			return safe("journal observed step changed")
+		}
 	}
 	return nil
+}
+
+func sameTime(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(b)
 }

@@ -9,8 +9,16 @@
   provider provenance rather than heuristic ownership takeover.
 - Add explicit dial address/TLS server name/single-node routing clients and real
   in-memory mTLS RPC, API/schema, rotation and disposable controller smoke tests.
-- Lifecycle completion/recovery, guarded live adoption and matched release assets
-  remain separate integration milestones; no automatic physical cleanup added.
+- Guarded live adoption and matched published release assets remain separate
+  integration milestones; no automatic physical cleanup added.
+- Add UID/RV-guarded versioned operation journals, explicit unknown outcomes,
+  per-step asynchronous single issuance and observed completion receipts.
+- Preserve accepted image intent across render rewrites, prevent registry-only OS
+  drift enforcement, and support sequential same-Machine receipt consumption.
+- Gate reboot/install completion on actual config/boot/OS/kubelet/Node recovery;
+  gate control-plane receipts on complete healthy voting etcd views and API health.
+- Add actual isolated core/runtime URL/mTLS/COSI/Lifecycle chain and Registrar CA
+  tests; legacy OS compatibility and reviewed live adoption remain explicit gates.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

@@ -53,6 +53,7 @@ var (
 // TalosConfigReconciler reconciles a TalosConfig object
 type TalosConfigReconciler struct {
 	client.Client
+	APIReader        client.Reader
 	Log              logr.Logger
 	Scheme           *runtime.Scheme
 	WatchFilterValue string
@@ -82,6 +83,7 @@ type TalosConfigScope struct {
 
 func (r *TalosConfigReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	r.Scheme = mgr.GetScheme()
+	r.APIReader = mgr.GetAPIReader()
 
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&bootstrapv1beta1.TalosConfig{}).

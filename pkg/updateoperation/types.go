@@ -13,19 +13,21 @@ import (
 )
 
 const (
-	JournalKey                 = "journal"
-	ReceiptKey                 = "receipt"
-	ConsumedReceiptKey         = "consumedReceipt"
-	LastReceiptKey             = "lastReceipt"
-	OwnerIntentKey             = "ownerIntent"
-	OwnerIntentVersion         = "v1"
-	SchemaVersion              = "v1"
-	OwnerIntentProvenanceValue = "cacppt"
-	AcceptedIntentKey          = "acceptedIntent"
-	OwnerPlanNameAnnotation    = "bootstrap.cluster.x-k8s.io/update-plan-secret"
-	OwnerPlanUIDAnnotation     = "bootstrap.cluster.x-k8s.io/update-plan-uid"
-	ProvenanceAnnotation       = "bootstrap.cluster.x-k8s.io/update-operation-created-by"
-	ProvenanceValue            = "cabpt"
+	JournalKey                        = "journal"
+	ReceiptKey                        = "receipt"
+	ConsumedReceiptKey                = "consumedReceipt"
+	LastReceiptKey                    = "lastReceipt"
+	OwnerIntentKey                    = "ownerIntent"
+	OwnerIntentVersion                = "v1"
+	SchemaVersion                     = "v1"
+	OwnerIntentProvenanceValue        = "cacppt"
+	AcceptedIntentKey                 = "acceptedIntent"
+	OwnerPlanNameAnnotation           = "bootstrap.cluster.x-k8s.io/update-plan-secret"
+	OwnerPlanUIDAnnotation            = "bootstrap.cluster.x-k8s.io/update-plan-uid"
+	ProvenanceAnnotation              = "bootstrap.cluster.x-k8s.io/update-operation-created-by"
+	ProvenanceValue                   = "cabpt"
+	InitialControlPlaneNameAnnotation = "bootstrap.cluster.x-k8s.io/initial-control-plane-name"
+	InitialControlPlaneUIDAnnotation  = "bootstrap.cluster.x-k8s.io/initial-control-plane-uid"
 )
 
 type Phase string
@@ -80,6 +82,14 @@ type ImageIdentity struct {
 	SchematicID string   `json:"schematicID,omitempty"`
 	Extensions  []string `json:"extensions,omitempty"`
 }
+
+// EtcdMemberIdentity is immutable expected membership, not mutable leader/raft state.
+type EtcdMemberIdentity struct {
+	MemberID   uint64   `json:"memberID"`
+	Hostname   string   `json:"hostname"`
+	PeerURLs   []string `json:"peerURLs"`
+	ClientURLs []string `json:"clientURLs"`
+}
 type OperationStep struct {
 	Kind              OperationKind `json:"kind"`
 	Phase             StepPhase     `json:"phase"`
@@ -119,6 +129,7 @@ type Journal struct {
 	NodeUID                  types.UID                    `json:"nodeUID"`
 	NodeProviderID           string                       `json:"nodeProviderID"`
 	ControlPlane             []ObjectIdentity             `json:"controlPlane,omitempty"`
+	OriginalEtcdMembers      []EtcdMemberIdentity         `json:"originalEtcdMembers,omitempty"`
 	CompletedAt              *metav1.Time                 `json:"completedAt,omitempty"`
 }
 type CompletionReceipt struct {

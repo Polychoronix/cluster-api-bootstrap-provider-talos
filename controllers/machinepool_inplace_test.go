@@ -232,6 +232,7 @@ func newFixture(t *testing.T, opts fixtureOptions) *fixture {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ownerName,
 			Namespace: testNamespace,
+			UID:       "config-uid",
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: capiv1.GroupVersion.String(),
 				Kind:       opts.ownerKind,
