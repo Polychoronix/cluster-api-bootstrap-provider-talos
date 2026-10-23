@@ -112,6 +112,22 @@ func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMac
 			if !started {
 				return fmt.Errorf("operation executor manager lifecycle unavailable")
 			}
+			if step.Kind == op.Apply || step.Kind == op.Install || step.Kind == op.Reboot {
+				workload, err := h.workloadNode(ctx, s.cluster, j.NodeName)
+				if err != nil || workload.UID != j.NodeUID || workload.Spec.ProviderID != j.NodeProviderID {
+					return fmt.Errorf("operation preflight workload identity unavailable")
+				}
+				if workload.DeletionTimestamp != nil || !workloadNodeReady(workload) {
+					respondRetry(resp, "waiting for healthy Node before operation issuance")
+					return nil
+				}
+				if _, cp := s.machine.Labels[clusterv1.MachineControlPlaneLabel]; cp {
+					if err := h.controlPlaneHealth(ctx, s.cluster, j); err != nil {
+						respondRetry(resp, "waiting for healthy control plane before operation issuance")
+						return nil
+					}
+				}
+			}
 			node, err := h.newNodeClient(ctx, client.ObjectKey{Namespace: s.cluster.Namespace, Name: s.cluster.Name}, j.Endpoint)
 			if err != nil {
 				return err
@@ -363,4 +379,13 @@ func (h *Handler) finalizeObserved(ctx context.Context, s *operationSnapshot, se
 	j.CompletedAt = &now
 	receipt := &op.CompletionReceipt{Version: op.SchemaVersion, TransactionID: j.TransactionID, MachineUID: j.Machine.UID, TalosConfigUID: j.TalosConfig.UID, InfrastructureUID: j.Infrastructure.UID, InputFreshness: j.InputFreshness, Phase: op.Observed, CompletedAt: now}
 	return op.WriteJournal(ctx, h.client, secret, j, receipt)
+}
+
+func workloadNodeReady(node *corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }

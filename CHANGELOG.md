@@ -51,6 +51,15 @@
 - Require actual preserved workload Node UID for managed adopted members while
   allowing reviewed next desired inputs and harmless identity/seed metadata churn
   after full initial ownership; original seed UID and bytes remain immutable.
+- Observe canonical effective shared/per-node policy separately from actual live
+  TalosConfig spec/identity through the existing renderer; semantically equivalent
+  representations pass while unapplied shared/private overlay policy fails closed.
+- Keep adopted identity authorization independent of transient readiness; health
+  gates new disruptive issuance and completion while expected same-UID NotReady
+  recovery stays pending without duplicate operations or ambiguous consent.
+- Add separate deleting-authority retirement validation for exact activated or
+  proved fresh native lineage; pending owner/update/receipt work, Observe, foreign
+  identities and pause still hold, while clean consumed lifecycle may delete.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

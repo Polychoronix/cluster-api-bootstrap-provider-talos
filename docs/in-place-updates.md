@@ -96,6 +96,16 @@ are collected independently, associated to Nodes/Machines and checked for consis
 healthy voting views; unmatched, duplicated or learner membership fails closed.
 No fixed control-plane count or unseen-member cleanup is inferred.
 
+TCP producers supply `ManagementObservationRequest.EffectiveTalosConfigs`, one
+canonical effective shared-plus-MachineUID policy preserving each actual TC
+name/namespace/UID. The engine re-reads the associated live TC for identity and
+live-spec pins, separately validates the effective spec against live authority
+shared/override policy, and resolves/renders it with the same `configinput` path.
+Both actual live spec and effective spec/source receipts stay in the private
+snapshot. Different live/effective representations may be semantically equivalent;
+unapplied shared or node-private policy differences fail observation, never trigger
+TC rewrites or Apply. Effective Secret rotation invalidates unconsumed approval.
+
 Initial TCP owner transfer uses the shared private aggregate association transaction:
 `PrepareManagementAssociation` validates original approval and full fresh snapshot,
 freezes every old-to-exact-TCP Machine controller-owner change, and leaves activation
@@ -117,6 +127,25 @@ policy forever. Durable identity checks still require the actual workload Node U
 providerID, exact TC/Infra Machine owners, and original seed UID/bytes. Metadata-only
 Secret resourceVersion churn is harmless for durable identity/seed guards; initial
 observation/approval and requested render freshness retain exact source receipts.
+Durable authorization checks identity/provenance, not continuous Ready status.
+New disruptive issuance requires fresh Node readiness (and full CP health); an
+already-issued reboot/config update becoming NotReady remains pending until same-UID
+health recovery, with no new destructive call or completion receipt. Expected
+retirement deletion state is likewise lifecycle progress, not recreated identity.
+Missing or same-name recreated Node UID remains a hard identity failure.
+
+`ValidateManagementRetirement(ctx, APIReader, authority)` is a separate read-only
+already-deleting-authority lifecycle gate. It permits only exact prior durable
+activation/current member associations or no-record proved fresh accepted bootstrap
+lineage. Observe, foreign/recreated identities, pending owner associations, active
+Machine/TC/Infra in-place markers or hooks, Prepared/Released owner plans, ambiguous
+executor work and unconsumed completion receipts hold retirement. Genuinely clean
+consumed receipts/plans do not make an authority permanently undeletable. Strict
+pause remains a stop. Expected core-deleted children/workload Node do not revoke
+completed ownership; the existing core/provider transaction still owns drain,
+membership and physical deletion. This helper never permits new rendering, Apply,
+Upgrade/Reboot, bootstrap publication or approval, and normal runtime/observation
+validators continue rejecting deleting authorities.
 
 
 `Cluster.spec.paused` or a standard `cluster.x-k8s.io/paused` annotation on any

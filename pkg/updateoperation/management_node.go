@@ -27,15 +27,13 @@ func validateManagementNode(ctx context.Context, reader client.Reader, safety *m
 		return managementError("activated workload client")
 	}
 	node := &corev1.Node{}
-	if workload.Get(ctx, client.ObjectKey{Name: member.NodeName}, node) != nil || node.UID != member.NodeUID || node.Spec.ProviderID != member.ProviderID || !node.DeletionTimestamp.IsZero() {
+	if workload.Get(ctx, client.ObjectKey{Name: member.NodeName}, node) != nil || node.UID != member.NodeUID || node.Spec.ProviderID != member.ProviderID {
 		return managementError("activated workload Node identity changed")
 	}
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
-			return nil
-		}
-	}
-	return managementError("activated workload Node not ready")
+	// Readiness and expected deletion are lifecycle state, not revoked identity.
+	// Issuance preflight/recovery owns those health gates; a rebooting same-UID
+	// Node remains authorized without permitting another destructive request.
+	return nil
 }
 
 // Initial observation captures RV to reject source changes during approval.

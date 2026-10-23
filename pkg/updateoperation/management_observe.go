@@ -22,6 +22,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -219,7 +220,12 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: *m.Spec.Bootstrap.DataSecretName}, seed) != nil || seed.UID == "" || len(seed.Data["value"]) == 0 {
 			return nil, managementError("original bootstrap seed")
 		}
-		normalized := tc.DeepCopy()
+		liveSpec := tc.Spec.DeepCopy()
+		liveSpec.Management = nil
+		normalized, e := managementEffectiveInput(request, authority, m, tc)
+		if e != nil {
+			return nil, e
+		}
 		normalized.Spec.Management = nil
 		normalized.Generation = 0
 		inputs, e := configinput.Resolve(ctx, reader, normalized)
@@ -323,7 +329,8 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		}
 		talos.Close()
 		ms, _ := json.Marshal(m.Spec)
-		cs, _ := json.Marshal(normalized.Spec)
+		cs, _ := json.Marshal(liveSpec)
+		effectiveSpec, _ := json.Marshal(normalized.Spec)
 		is, _, e := unstructured.NestedMap(infra.Object, "spec")
 		if e != nil {
 			return nil, managementError("InfraMachine spec")
@@ -332,7 +339,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if e != nil {
 			return nil, managementError("InfraMachine encoding")
 		}
-		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: managementSource(seed, "value"), Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
+		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: managementSource(seed, "value"), Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
 	}
 	if a.Kind == "TalosControlPlane" {
 		for i := range o.safety.Etcd {
@@ -448,6 +455,14 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 }
 
 func managementInfrastructure(ctx context.Context, reader client.Reader, m *clusterv1.Machine) (*unstructured.Unstructured, error) {
+	infra, err := managementInfrastructureObject(ctx, reader, m)
+	if err != nil || infra.GetUID() == "" || !managementController(infra, m) || !infra.GetDeletionTimestamp().IsZero() {
+		return nil, managementError("settled infrastructure owner")
+	}
+	return infra, nil
+}
+
+func managementInfrastructureObject(ctx context.Context, reader client.Reader, m *clusterv1.Machine) (*unstructured.Unstructured, error) {
 	crds := &unstructured.UnstructuredList{}
 	crds.SetAPIVersion("apiextensions.k8s.io/v1")
 	crds.SetKind("CustomResourceDefinitionList")
@@ -474,8 +489,11 @@ func managementInfrastructure(ctx context.Context, reader client.Reader, m *clus
 	infra := &unstructured.Unstructured{}
 	infra.SetAPIVersion(m.Spec.InfrastructureRef.APIGroup + "/" + version)
 	infra.SetKind(m.Spec.InfrastructureRef.Kind)
-	if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.InfrastructureRef.Name}, infra) != nil || infra.GetUID() == "" || !managementController(infra, m) || !infra.GetDeletionTimestamp().IsZero() {
-		return nil, managementError("settled infrastructure owner")
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.InfrastructureRef.Name}, infra); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, errManagementInfraNotFound
+		}
+		return nil, managementError("infrastructure lookup")
 	}
 	return infra, nil
 }

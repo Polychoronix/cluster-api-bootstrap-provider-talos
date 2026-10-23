@@ -92,6 +92,24 @@ func TestManagementAssociationTwoMemberDisposableAPIRestart(t *testing.T) {
 	tcp.Object["spec"] = map[string]any{"management": raw}
 	require.NoError(t, api.Create(t.Context(), tcp))
 	request.Authority.UID = tcp.GetUID()
+	sharedPolicy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "shared-policy"}, Data: map[string][]byte{"patch": []byte("machine:\n  env:\n    PRIVATE_SHARED_POLICY: mismatch\n")}}
+	nodePolicy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "node-policy"}, Data: map[string][]byte{"patch": []byte("machine:\n  type: controlplane\n")}}
+	require.NoError(t, api.Create(t.Context(), sharedPolicy))
+	require.NoError(t, api.Create(t.Context(), nodePolicy))
+	setEffectivePolicy(t, api, api, &request, true, true)
+	_, err = ObserveManagement(t.Context(), api, request)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "PRIVATE_SHARED_POLICY")
+	sharedPolicy.Data["patch"] = []byte("machine:\n  type: controlplane\n")
+	require.NoError(t, api.Update(t.Context(), sharedPolicy))
+	nodePolicy.Data["patch"] = []byte("machine:\n  env:\n    PRIVATE_NODE_POLICY: mismatch\n")
+	require.NoError(t, api.Update(t.Context(), nodePolicy))
+	_, err = ObserveManagement(t.Context(), api, request)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "PRIVATE_NODE_POLICY")
+	nodePolicy.Data["patch"] = []byte("machine:\n  type: controlplane\n")
+	require.NoError(t, api.Update(t.Context(), nodePolicy))
+	require.NoError(t, api.Get(t.Context(), client.ObjectKeyFromObject(tcp), tcp))
 	observed, err := ObserveManagement(t.Context(), api, request)
 	require.NoError(t, err)
 	status, err := RecordManagementObservation(t.Context(), api, api, observed)
@@ -100,7 +118,7 @@ func TestManagementAssociationTwoMemberDisposableAPIRestart(t *testing.T) {
 	request.Spec.Approval = &bootstrapv1.ObservationApproval{Revision: request.Spec.InventoryRevision, ObservationID: status.Observation.ID}
 	raw, err = runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 	require.NoError(t, err)
-	tcp.Object["spec"] = map[string]any{"management": raw}
+	tcp.Object["spec"].(map[string]any)["management"] = raw
 	require.NoError(t, api.Update(t.Context(), tcp))
 	prepared, err := PrepareManagementAssociation(t.Context(), api, api, request)
 	require.NoError(t, err)

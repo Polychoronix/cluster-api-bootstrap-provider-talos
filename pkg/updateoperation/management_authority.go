@@ -199,7 +199,7 @@ func ManagementAcceptedIntent(ctx context.Context, reader client.Reader, a Manag
 	for _, member := range safety.Members {
 		if member.Machine.UID == m.UID && member.TalosConfig.UID == tc.UID {
 			var originalSpec bootstrapv1.TalosConfigSpec
-			if json.Unmarshal(member.ConfigSpec, &originalSpec) != nil {
+			if json.Unmarshal(member.EffectiveSpec, &originalSpec) != nil {
 				return AcceptedIntent{}, managementError("original configuration intent")
 			}
 			image, e := ConfigurationImage(member.Runtime.Configuration, originalSpec)

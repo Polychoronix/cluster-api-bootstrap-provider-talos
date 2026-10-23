@@ -56,6 +56,10 @@ type ManagementObservationRequest struct {
 	Spec         *bootstrapv1.ManagementSpec
 	Machines     []*clusterv1.Machine
 	TalosConfigs []*bootstrapv1.TalosConfig
+	// EffectiveTalosConfigs is the canonical shared+per-Machine input policy.
+	// Objects must retain the actual associated TC name/namespace/UID. A producer
+	// supplies this for TCP policy; live TalosConfigs remain identity/spec pins.
+	EffectiveTalosConfigs []*bootstrapv1.TalosConfig
 }
 
 type ManagementObservationSummary struct {
@@ -74,6 +78,7 @@ type managementMember struct {
 	ProviderID         string                       `json:"providerID"`
 	MachineSpec        json.RawMessage              `json:"machineSpec"`
 	ConfigSpec         json.RawMessage              `json:"configSpec"`
+	EffectiveSpec      json.RawMessage              `json:"effectiveSpec"`
 	InfrastructureSpec json.RawMessage              `json:"infrastructureSpec"`
 	Sources            []configinput.SourceIdentity `json:"sources"`
 	Seed               configinput.SourceIdentity   `json:"seed"`
