@@ -34,6 +34,8 @@ const managementRecordKey = "management"
 
 var ErrManagementPaused = errors.New("Talos management reconciliation is paused")
 
+var ErrManagementRecordNotFound = errors.New("Talos management record not found")
+
 // ManagementAuthority identifies the live object whose single manifest approval
 // governs observation. Namespace is explicit and every input must be local to it.
 type ManagementAuthority struct {
@@ -89,6 +91,7 @@ type managementRuntime struct {
 
 type managementSafety struct {
 	Authority     ManagementAuthority          `json:"authority"`
+	AuthoritySpec json.RawMessage              `json:"authoritySpec"`
 	ClusterUID    types.UID                    `json:"clusterUID"`
 	ClusterName   string                       `json:"clusterName"`
 	ClusterInputs json.RawMessage              `json:"clusterInputs"`
@@ -100,6 +103,7 @@ type managementSafety struct {
 
 type managementEtcdMember struct {
 	MemberID   uint64    `json:"memberID"`
+	LeaderID   uint64    `json:"-"`
 	Hostname   string    `json:"hostname"`
 	PeerURLs   []string  `json:"peerURLs"`
 	ClientURLs []string  `json:"clientURLs"`
@@ -128,15 +132,16 @@ func (*ManagementObservation) MarshalJSON() ([]byte, error) {
 }
 
 type managementRecord struct {
-	Version        string              `json:"version"`
-	Authority      ManagementAuthority `json:"authority"`
-	Revision       string              `json:"revision"`
-	ObservationID  string              `json:"observationID"`
-	ObservedAt     metav1.Time         `json:"observedAt"`
-	SnapshotName   string              `json:"snapshotName"`
-	SnapshotUID    types.UID           `json:"snapshotUID"`
-	SnapshotDigest [32]byte            `json:"snapshotDigest"`
-	Activated      bool                `json:"activated"`
+	Version        string                       `json:"version"`
+	Authority      ManagementAuthority          `json:"authority"`
+	Revision       string                       `json:"revision"`
+	ObservationID  string                       `json:"observationID"`
+	ObservedAt     metav1.Time                  `json:"observedAt"`
+	SnapshotName   string                       `json:"snapshotName"`
+	SnapshotUID    types.UID                    `json:"snapshotUID"`
+	SnapshotDigest [32]byte                     `json:"snapshotDigest"`
+	Activated      bool                         `json:"activated"`
+	Associations   []managementAssociationState `json:"associations,omitempty"`
 }
 
 func managementError(stage string) error          { return fmt.Errorf("Talos management %s failed", stage) }
@@ -219,8 +224,8 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 		o.summary.Observation = *managementStatus(r).Observation
 		return managementStatus(r), nil
 	}
-	if err == nil && r.Activated {
-		return nil, managementError("activated safety snapshot changed")
+	if err == nil && (r.Activated || len(r.Associations) != 0) {
+		return nil, managementError("approved safety snapshot changed")
 	}
 	id := uuid.NewString()
 	immutable := true
@@ -260,6 +265,9 @@ func ActivateManagement(ctx context.Context, c client.Client, reader client.Read
 	s, r, payload, err := readManagement(ctx, reader, request.Authority)
 	if err != nil {
 		return nil, err
+	}
+	if request.Authority.Kind == "TalosControlPlane" || len(r.Associations) != 0 {
+		return nil, managementError("aggregate ownership association required")
 	}
 	current, e := json.Marshal(o.safety)
 	if e != nil || !bytes.Equal(payload, current) || request.Spec.InventoryRevision != r.Revision || request.Spec.Approval.Revision != r.Revision || request.Spec.Approval.ObservationID != r.ObservationID {
@@ -301,6 +309,11 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	}
 	if !r.Activated || r.Revision != spec.InventoryRevision || spec.Approval.Revision != r.Revision || spec.Approval.ObservationID != r.ObservationID {
 		return managementError("activation identity")
+	}
+	for _, association := range r.Associations {
+		if !association.Completed {
+			return managementError("ownership association pending")
+		}
 	}
 	safety := &managementSafety{}
 	if json.Unmarshal(payload, safety) != nil {

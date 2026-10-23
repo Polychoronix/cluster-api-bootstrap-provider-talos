@@ -8,6 +8,7 @@ import (
 	"fmt"
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
+	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/stretchr/testify/require"
@@ -36,6 +37,7 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 	require.NoError(t, bootstrapv1.AddToScheme(scheme))
 	machine := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "machine-1", UID: "machine-uid"}, Spec: clusterv1.MachineSpec{ClusterName: "test-cluster", Version: "v1.34.0", Bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("original-seed"), ConfigRef: clusterv1.ContractVersionedObjectReference{APIGroup: bootstrapv1.GroupVersion.Group, Kind: "TalosConfig", Name: "machine-1"}}}, Status: clusterv1.MachineStatus{Addresses: []clusterv1.MachineAddress{{Type: clusterv1.MachineInternalIP, Address: "192.168.1.10"}}}}
 	configObject := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "machine-1", UID: "config-uid", Generation: 1, Labels: map[string]string{clusterv1.ClusterNameLabel: "test-cluster"}}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.13"}, Status: bootstrapv1.TalosConfigStatus{DataSecretName: "machine-1-bootstrap-data"}}
+	configObject.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(machine, clusterv1.GroupVersion.WithKind("Machine"))}
 	if resolvedImage != "" {
 		configObject.Status.ImageFactory = &bootstrapv1.ImageFactoryStatus{InstallerImage: resolvedImage}
 	}
@@ -46,7 +48,10 @@ func newUpdateFixture(t *testing.T, runningVersion, configImage, secretHash, res
 	require.NoError(t, err)
 	generation := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "test-cluster-talos", UID: "bundle-uid"}, Data: map[string][]byte{"bundle": encoded}}
 	output := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: configObject.Status.DataSecretName, UID: "output-uid"}, Data: map[string][]byte{"value": []byte(machineConfigWithImage(configImage))}}
-	management := fake.NewClientBuilder().WithScheme(scheme).WithObjects(machine, configObject, cluster, generation, output).Build()
+	accepted, err := op.EncodeAcceptedIntent(op.AcceptedIntent{MachineUID: machine.UID, TalosConfigUID: configObject.UID})
+	require.NoError(t, err)
+	seed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: machine.Namespace, Name: "original-seed", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(configObject, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": []byte("original installed configuration"), op.AcceptedIntentKey: accepted}}
+	management := fake.NewClientBuilder().WithScheme(scheme).WithObjects(machine, configObject, cluster, generation, output, seed).Build()
 	if secretHash != "stale-hash" {
 		inputs, err := configinput.Resolve(context.Background(), management, configObject)
 		require.NoError(t, err)

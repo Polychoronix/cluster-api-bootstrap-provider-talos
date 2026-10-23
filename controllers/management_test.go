@@ -52,8 +52,9 @@ func TestManagementUnassociatedObserveDoesNotGenerate(t *testing.T) {
 	tc := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "config", UID: "tc"}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "worker", Management: &bootstrapv1.ManagementSpec{Mode: bootstrapv1.ManagementModeObserve, InventoryRevision: "inventory", Machines: []bootstrapv1.MachineIdentityReference{{Name: "worker", UID: "machine"}}}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(tc).WithObjects(tc).Build()
 	r := &TalosConfigReconciler{Client: c, APIReader: c, Scheme: scheme, Log: ctrl.Log}
-	_, e := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tc)})
+	result, e := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tc)})
 	require.NoError(t, e)
+	require.Positive(t, result.RequeueAfter, "pending association must retry without an arbitrary external event")
 	secrets := &corev1.SecretList{}
 	require.NoError(t, c.List(t.Context(), secrets))
 	require.Empty(t, secrets.Items)

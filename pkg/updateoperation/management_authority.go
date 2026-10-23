@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	corev1 "k8s.io/api/core/v1"
+	"reflect"
 
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +21,10 @@ import (
 // children read the exact TCP controller object; they never inherit consent from
 // a name, a noncontroller reference or a second child approval.
 func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (ManagementAuthority, *bootstrapv1.ManagementSpec, error) {
-	if m == nil || tc == nil || m.Namespace != tc.Namespace || m.Spec.Bootstrap.ConfigRef.Name != tc.Name || !managementController(tc, m) {
+	if reader == nil {
+		return ManagementAuthority{}, nil, managementError("APIReader required")
+	}
+	if m == nil || tc == nil || m.Namespace != tc.Namespace || m.Spec.Bootstrap.ConfigRef.APIGroup != bootstrapv1.GroupVersion.Group || m.Spec.Bootstrap.ConfigRef.Kind != "TalosConfig" || m.Spec.Bootstrap.ConfigRef.Name != tc.Name || !managementController(tc, m) {
 		return ManagementAuthority{}, nil, managementError("Machine bootstrap association")
 	}
 	if managementPaused(m) || managementPaused(tc) {
@@ -56,6 +60,11 @@ func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m 
 			return a, nil, managementError("authority management decode")
 		}
 		if !found {
+			if _, _, _, err := readManagement(ctx, reader, a); err == nil {
+				return a, nil, managementError("management declaration removed")
+			} else if err != ErrNotFound {
+				return a, nil, err
+			}
 			return a, nil, nil
 		}
 		management := &bootstrapv1.ManagementSpec{}
@@ -64,7 +73,15 @@ func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m 
 		}
 		return a, management, nil
 	}
-	return ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}, tc.Spec.Management, nil
+	a := ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}
+	if tc.Spec.Management == nil {
+		if _, _, _, err := readManagement(ctx, reader, a); err == nil {
+			return a, nil, managementError("management declaration removed")
+		} else if err != ErrNotFound {
+			return a, nil, err
+		}
+	}
+	return a, tc.Spec.Management, nil
 }
 
 // ValidateManagedMachine checks only reads before new runtime/receipt work. For
@@ -72,6 +89,9 @@ func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m 
 // remains required by the normal renderer/executor; an original external seed is
 // never promoted into accepted intent by this function.
 func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) error {
+	if reader == nil {
+		return managementError("APIReader required")
+	}
 	if m == nil || tc == nil {
 		return managementError("Machine lookup")
 	}
@@ -85,24 +105,6 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 	if managementPaused(cluster) || (cluster.Spec.Paused != nil && *cluster.Spec.Paused) {
 		return ErrManagementPaused
 	}
-	if tc.Spec.Management == nil && tc.Status.Management == nil {
-		owner := metav1.GetControllerOf(m)
-		if owner == nil || owner.Kind != "TalosControlPlane" {
-			return nil
-		}
-		tcp := &unstructured.Unstructured{}
-		tcp.SetAPIVersion(owner.APIVersion)
-		tcp.SetKind(owner.Kind)
-		if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: owner.Name}, tcp) != nil || tcp.GetUID() != owner.UID {
-			return managementError("control-plane authority lookup")
-		}
-		if managementPaused(tcp) {
-			return ErrManagementPaused
-		}
-		if _, found, e := unstructured.NestedMap(tcp.Object, "spec", "management"); e == nil && !found {
-			return nil
-		}
-	}
 	a, spec, e := ManagementAuthorityForMachine(ctx, reader, m, tc)
 	if e != nil {
 		return e
@@ -115,7 +117,7 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 		} else if e != ErrNotFound {
 			return e
 		}
-		return nil
+		return ValidateFreshBootstrapIntent(ctx, reader, m, tc)
 	}
 	if e := ValidateManagementActivation(ctx, reader, a, spec); e != nil {
 		return e
@@ -132,7 +134,7 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 			}
 		}
 	}
-	_, _, payload, e := readManagement(ctx, reader, a)
+	_, record, payload, e := readManagement(ctx, reader, a)
 	if e != nil {
 		return e
 	}
@@ -144,6 +146,15 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 		if member.Machine.Name == m.Name && member.Machine.UID == m.UID && member.TalosConfig.Name == tc.Name && member.TalosConfig.UID == tc.UID {
 			if member.ProviderID != m.Spec.ProviderID || member.NodeName != m.Status.NodeRef.Name || member.Infrastructure.Name != m.Spec.InfrastructureRef.Name || member.Infrastructure.Kind != m.Spec.InfrastructureRef.Kind || member.Infrastructure.APIGroup != m.Spec.InfrastructureRef.APIGroup {
 				return managementError("activated association changed")
+			}
+			expectedOwners := member.Machine.OwnerReferences
+			for _, association := range record.Associations {
+				if association.Machine.UID == m.UID && association.Completed {
+					expectedOwners = association.After
+				}
+			}
+			if !reflect.DeepEqual(m.OwnerReferences, expectedOwners) {
+				return managementError("activated owner association changed")
 			}
 			infra, e := managementInfrastructure(ctx, reader, m)
 			if e != nil {

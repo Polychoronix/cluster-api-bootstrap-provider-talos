@@ -81,3 +81,10 @@ func TestManagementApprovalRejectsStaleSourceAndUID(t *testing.T) {
 		})
 	}
 }
+
+func TestManagementObservationRejectsInconsistentEtcdLeadership(t *testing.T) {
+	c, request, servers := managementTLSFixture(t, 5)
+	servers[1].leader = 2
+	_, err := ObserveManagement(t.Context(), c, request)
+	require.Error(t, err)
+}

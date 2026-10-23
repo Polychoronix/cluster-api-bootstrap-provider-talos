@@ -69,10 +69,12 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 
 	owner := &configowner.ConfigOwner{Unstructured: owned}
 
+	c := builder.Build()
 	return &TalosConfigReconciler{
-			Client: builder.Build(),
-			Log:    ctrl.Log.WithName("test"),
-			Scheme: scheme,
+			Client:    c,
+			APIReader: c,
+			Log:       ctrl.Log.WithName("test"),
+			Scheme:    scheme,
 		}, &TalosConfigScope{
 			Config:      config,
 			ConfigOwner: owner,

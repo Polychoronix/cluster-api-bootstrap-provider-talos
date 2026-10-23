@@ -69,6 +69,7 @@ func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec,
 		client: c,
 		reconciler: &TalosConfigReconciler{
 			Client:       c,
+			APIReader:    c,
 			Log:          ctrl.Log.WithName("test"),
 			Scheme:       scheme,
 			ImageFactory: api,

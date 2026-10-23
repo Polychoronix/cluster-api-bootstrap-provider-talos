@@ -54,13 +54,18 @@ type managementRPC struct {
 	machineapi.UnimplementedMachineServiceServer
 	members []*machineapi.EtcdMember
 	self    uint64
+	leader  uint64
 }
 
 func (s *managementRPC) EtcdMemberList(context.Context, *machineapi.EtcdMemberListRequest) (*machineapi.EtcdMemberListResponse, error) {
 	return &machineapi.EtcdMemberListResponse{Messages: []*machineapi.EtcdMembers{{Members: s.members}}}, nil
 }
 func (s *managementRPC) EtcdStatus(context.Context, *emptypb.Empty) (*machineapi.EtcdStatusResponse, error) {
-	return &machineapi.EtcdStatusResponse{Messages: []*machineapi.EtcdStatus{{MemberStatus: &machineapi.EtcdMemberStatus{MemberId: s.self, Leader: 1, RaftTerm: 2, RaftAppliedIndex: 3}}}}, nil
+	leader := s.leader
+	if leader == 0 {
+		leader = 1
+	}
+	return &machineapi.EtcdStatusResponse{Messages: []*machineapi.EtcdStatus{{MemberStatus: &machineapi.EtcdMemberStatus{MemberId: s.self, Leader: leader, RaftTerm: 2, RaftAppliedIndex: 3}}}}, nil
 }
 func (s *managementRPC) ServiceList(context.Context, *emptypb.Empty) (*machineapi.ServiceListResponse, error) {
 	return &machineapi.ServiceListResponse{Messages: []*machineapi.ServiceList{{Services: []*machineapi.ServiceInfo{{Id: "etcd", Health: &machineapi.ServiceHealth{Healthy: true}}}}}}, nil
@@ -218,7 +223,7 @@ func TestObserveManagementUnownedTCPGenericTopologyAndApproval(t *testing.T) {
 			tcp.SetGeneration(tcp.GetGeneration() + 1)
 			tcp.SetAnnotations(map[string]string{"reconcile.fluxcd.io/requestedAt": "approve"})
 			require.NoError(t, c.Update(t.Context(), tcp))
-			activated, e := ActivateManagement(t.Context(), c, c, request)
+			activated, e := associateAll(t, c, c, request)
 			require.NoError(t, e)
 			require.Equal(t, first.Observation.ID, activated.Observation.ID)
 			require.Equal(t, "inventory-1", activated.ActivatedRevision)

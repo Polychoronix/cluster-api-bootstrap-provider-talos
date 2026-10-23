@@ -6,10 +6,10 @@ package controllers
 import (
 	"context"
 	"errors"
+	"time"
 
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -23,10 +23,7 @@ import (
 // normal rendering must not run on this pass.
 func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc *bootstrapv1.TalosConfig) (bool, ctrl.Result, error) {
 	if r.APIReader == nil {
-		if tc.Spec.Management != nil {
-			return true, ctrl.Result{}, errors.New("Talos management APIReader required")
-		}
-		return false, ctrl.Result{}, nil
+		return true, ctrl.Result{}, errors.New("Talos management APIReader required")
 	}
 	if _, paused := tc.Annotations[clusterv1.PausedAnnotation]; paused {
 		return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
@@ -46,15 +43,23 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	}
 	owner := metav1.GetControllerOf(tc)
 	if owner == nil || owner.Kind != "Machine" || owner.APIVersion != clusterv1.GroupVersion.String() {
-		if tc.Spec.Management != nil {
-			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AssociationPending")
+		authority := op.ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}
+		if err := op.RequireNoManagementRecord(ctx, r.APIReader, authority); err != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired")
+		}
+		if tc.Spec.Management != nil || tc.Status.Management != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "AssociationPending")
 		}
 		return false, ctrl.Result{}, nil
 	}
 	m := &clusterv1.Machine{}
 	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: tc.Namespace, Name: owner.Name}, m) != nil || m.UID != owner.UID {
-		if tc.Spec.Management != nil {
-			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AssociationPending")
+		authority := op.ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}
+		if err := op.RequireNoManagementRecord(ctx, r.APIReader, authority); err != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired")
+		}
+		if tc.Spec.Management != nil || tc.Status.Management != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "AssociationPending")
 		}
 		return false, ctrl.Result{}, nil
 	}
@@ -73,7 +78,9 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if tc.Spec.Management != nil || tc.Status.Management != nil {
 			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AuthorityInvalid")
 		}
-		if m.Spec.Bootstrap.DataSecretName != nil || m.Status.NodeRef.IsDefined() { return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired") }
+		if m.Spec.Bootstrap.DataSecretName != nil || m.Status.NodeRef.IsDefined() {
+			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired")
+		}
 		// Normal fresh CP creation may not yet have the TCP controller attached.
 		return false, ctrl.Result{}, nil
 	}
@@ -83,14 +90,9 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		}
 		// A custom/imported original seed cannot select normal generation merely by
 		// omitting management. A CABPT-owned seed remains the existing fresh path.
-		if m.Spec.Bootstrap.DataSecretName != nil && m.Status.NodeRef.IsDefined() {
-			seed := &corev1.Secret{}
-			if r.APIReader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: *m.Spec.Bootstrap.DataSecretName}, seed) != nil {
-				return true, ctrl.Result{}, errors.New("Talos management original seed lookup failed")
-			}
-			ref := metav1.GetControllerOf(seed)
-			if ref == nil || ref.Kind != "TalosConfig" || ref.UID != tc.UID {
-				return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired")
+		if m.Spec.Bootstrap.DataSecretName != nil || m.Status.NodeRef.IsDefined() {
+			if err := op.ValidateFreshBootstrapIntent(ctx, r.APIReader, m, tc); err != nil {
+				return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired")
 			}
 		}
 		return false, ctrl.Result{}, nil
@@ -120,7 +122,13 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if tc.Annotations[op.InitialControlPlaneNameAnnotation] == a.Name && tc.Annotations[op.InitialControlPlaneUIDAnnotation] == string(a.UID) && tc.Status.Management == nil {
 			return false, ctrl.Result{}, nil
 		}
-		tc.Status.Management = &bootstrapv1.ManagementStatus{ActivatedRevision: spec.InventoryRevision}
+		status, err := op.ReadManagementStatus(ctx, r.APIReader, a)
+		if err != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, err
+		}
+		if err := r.managementStatus(ctx, tc, status, true, true, "Activated"); err != nil {
+			return true, ctrl.Result{}, err
+		}
 		return !bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{}, nil
 	}
 	request := op.ManagementObservationRequest{Authority: a, Cluster: cluster, Spec: spec, Machines: []*clusterv1.Machine{m}, TalosConfigs: []*bootstrapv1.TalosConfig{tc}}
@@ -153,7 +161,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if errors.Is(e, op.ErrManagementPaused) {
 			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
 		}
-		return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "ObservationIncomplete")
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.managementStatus(ctx, tc, nil, false, false, "ObservationIncomplete")
 	}
 	status, e := op.RecordManagementObservation(ctx, r.Client, r.APIReader, observed)
 	if e != nil {

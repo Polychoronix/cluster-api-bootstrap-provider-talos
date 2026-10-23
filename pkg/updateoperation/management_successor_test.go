@@ -32,7 +32,7 @@ func TestManagementNativeSuccessorRequiresRealAcceptedSeed(t *testing.T) {
 	require.NoError(t, e)
 	tcp.Object["spec"] = map[string]any{"management": raw}
 	require.NoError(t, c.Update(t.Context(), tcp))
-	_, e = ActivateManagement(t.Context(), c, c, request)
+	_, e = associateAll(t, c, c, request)
 	require.NoError(t, e)
 	m := request.Machines[0].DeepCopy()
 	m.Name = "native"

@@ -282,6 +282,7 @@ func newFixture(t *testing.T, opts fixtureOptions) *fixture {
 
 	f.reconciler = &TalosConfigReconciler{
 		Client:                    c,
+		APIReader:                 c,
 		Log:                       ctrl.Log.WithName("test"),
 		Scheme:                    scheme,
 		MachinePoolInPlaceUpdates: opts.enabled,

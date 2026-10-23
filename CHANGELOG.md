@@ -38,6 +38,16 @@
 - Preserve positive native CP successor bootstrap lineage after aggregate activation;
   imported inventory never becomes permission to recreate a seed or counterfeit
   native accepted intent, and successors need no duplicated child adoption approval.
+- Require APIReader and actual fresh accepted seed provenance even when public
+  management fields are removed; retained private records remain a hard fence.
+- Freeze aggregate initial Machine owner transitions privately before transfer;
+  activate only after all exact owners and unchanged original safety are observed,
+  preserving the approved observation ID across partial transfer and restart.
+- Retry unresolved observations through existing bounded reconciliation and patch
+  child management status explicitly without inventing readiness or bypassing pause.
+- Bind immutable observations to normalized live authority policy, including TCP
+  desired templates, versions and per-Machine overrides; approval-only changes do
+  not alter opaque observation identity and association permits only attested refs.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

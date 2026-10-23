@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -131,11 +132,16 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if e != nil {
 		return nil, managementError("Cluster input encoding")
 	}
-	o := &ManagementObservation{safety: managementSafety{Authority: a, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Revision: live.InventoryRevision, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementSource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
+	authoritySpec, e := managementAuthoritySpec(authority)
+	if e != nil {
+		return nil, e
+	}
+	o := &ManagementObservation{safety: managementSafety{Authority: a, AuthoritySpec: authoritySpec, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Revision: live.InventoryRevision, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementSource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
 	pinned := append([]bootstrapv1.MachineIdentityReference(nil), live.Machines...)
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].Name < pinned[j].Name })
 	nodeIDs := map[types.UID]bool{}
 	etcdNodes := map[uint64]managementEtcdMember{}
+	var observedLeader uint64
 	for _, pin := range pinned {
 		var supplied *clusterv1.Machine
 		for _, m := range request.Machines {
@@ -194,6 +200,9 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		for _, t := range request.TalosConfigs {
 			if t != nil && t.Namespace == a.Namespace && t.Name == tc.Name && t.UID == tc.UID {
 				expectedTC = true
+				if !reflect.DeepEqual(t.Spec, tc.Spec) {
+					return nil, managementError("requested configuration differs from live")
+				}
 			}
 		}
 		if !expectedTC || tc.UID == "" || (a.Kind == "TalosConfig" && (tc.Name != a.Name || tc.UID != a.UID)) || (a.Kind == "TalosControlPlane" && tc.Spec.Management != nil) {
@@ -301,6 +310,11 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 				talos.Close()
 				return nil, managementError("inconsistent etcd membership")
 			}
+			if observedLeader != 0 && observedLeader != self.LeaderID {
+				talos.Close()
+				return nil, managementError("inconsistent etcd leadership")
+			}
+			observedLeader = self.LeaderID
 			if _, exists := etcdNodes[self.MemberID]; exists {
 				talos.Close()
 				return nil, managementError("duplicate etcd association")
@@ -361,6 +375,15 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	}
 	if err := validateManagementAuthority(ctx, reader, a); err != nil {
 		return nil, err
+	}
+	liveAuthority := &unstructured.Unstructured{}
+	liveAuthority.SetAPIVersion(a.APIVersion)
+	liveAuthority.SetKind(a.Kind)
+	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: a.Name}, liveAuthority) != nil {
+		return nil, managementError("authority changed during observation")
+	}
+	if current, err := managementAuthoritySpec(liveAuthority); err != nil || !bytes.Equal(current, o.safety.AuthoritySpec) {
+		return nil, managementError("authority policy changed during observation")
 	}
 	liveCluster := &clusterv1.Cluster{}
 	if reader.Get(ctx, client.ObjectKeyFromObject(cluster), liveCluster) != nil || liveCluster.UID != cluster.UID {
@@ -509,6 +532,7 @@ func managementEtcd(ctx context.Context, c *machineryclient.Client, endpoint boo
 				return nil, managementEtcdMember{}, managementError("etcd Node association")
 			}
 			self = v
+			self.LeaderID = state.Leader
 			self.MachineUID = m.UID
 			self.NodeUID = n.UID
 		}
@@ -540,4 +564,20 @@ func managementClusterInputs(cluster *clusterv1.Cluster) ([]byte, error) {
 		Network  clusterv1.ClusterNetwork
 		Endpoint clusterv1.APIEndpoint
 	}{cluster.Name, cluster.Spec.ClusterNetwork, cluster.Spec.ControlPlaneEndpoint})
+}
+
+func managementAuthoritySpec(authority *unstructured.Unstructured) ([]byte, error) {
+	spec, found, err := unstructured.NestedMap(authority.Object, "spec")
+	if err != nil || !found {
+		return nil, managementError("authority spec")
+	}
+	if management, ok := spec["management"].(map[string]any); ok {
+		delete(management, "mode")
+		delete(management, "approval")
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return nil, managementError("authority spec encoding")
+	}
+	return encoded, nil
 }

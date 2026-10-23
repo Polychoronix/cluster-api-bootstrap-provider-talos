@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -26,8 +25,10 @@ func TestRuntimeUsesLiveConfigOutputNotInstallationSeed(t *testing.T) {
 	require.NoError(t, f.handler.client.Get(ctx, types.NamespacedName{Namespace: "default", Name: "machine-1"}, machine))
 	machine.Spec.Bootstrap.DataSecretName = ptr.To("original-seed")
 	require.NoError(t, f.handler.client.Update(ctx, machine))
-	seed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "original-seed"}, Data: map[string][]byte{"value": []byte("immutable-original-installation")}}
-	require.NoError(t, f.handler.client.Create(ctx, seed))
+	seed := &corev1.Secret{}
+	require.NoError(t, f.handler.client.Get(ctx, types.NamespacedName{Namespace: "default", Name: "original-seed"}, seed))
+	seed.Data["value"] = []byte("immutable-original-installation")
+	require.NoError(t, f.handler.client.Update(ctx, seed))
 	f.request.Desired.Machine.Spec.Bootstrap.DataSecretName = ptr.To(seed.Name)
 	data, fresh, err := f.handler.desiredConfig(ctx, &f.request.Desired.Machine, f.request.Desired.BootstrapConfig)
 	require.NoError(t, err)

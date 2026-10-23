@@ -83,6 +83,11 @@ not a Secret UID or content digest. Approval/mode/requestedAt and generation-onl
 churn do not change unchanged observation identity. There is no TTL, periodic
 drift enforcement, renewal consent or additional per-operation approval API.
 Deleting/replacing a private snapshot cannot renew old approval at the same revision.
+The private snapshot includes the complete normalized live authority spec, not
+only the management subfield or current children. TCP desired configuration,
+overrides, versions, templates and replicas invalidate an unconsumed observation;
+only management.mode/approval and metadata bookkeeping are excluded. No private
+policy hash is published. Approved association cannot ignore desired-policy changes.
 
 TCP consumers use the same exported ManagementSpec/ManagementStatus once for the
 complete configured Machine inventory. Observation does not require TCP ownership,
@@ -90,6 +95,23 @@ but TC/Infra children must be owned by each exact Machine. All actual etcd membe
 are collected independently, associated to Nodes/Machines and checked for consistent
 healthy voting views; unmatched, duplicated or learner membership fails closed.
 No fixed control-plane count or unseen-member cleanup is inferred.
+
+Initial TCP owner transfer uses the shared private aggregate association transaction:
+`PrepareManagementAssociation` validates original approval and full fresh snapshot,
+freezes every old-to-exact-TCP Machine controller-owner change, and leaves activation
+pending. The TCP producer performs only its supported no-create Machine UID/RV CAS.
+`CompleteManagementAssociation` reobserves all members and activates only after every
+declared owner is exact and all original config/Node/Infra/source/runtime/etcd safety
+facts remain unchanged modulo the attested owner refs. Restart accepts only original
+or frozen desired owners; partial transfer never releases lifecycle. The original
+opaque observation ID and immutable snapshot are preserved, not refreshed as consent.
+Standalone approval has no owner delta and retains direct `ActivateManagement`.
+
+Missing input/association observations retry at the existing bounded reconciliation
+cadence. Successful Observe does not establish periodic drift enforcement. Removing
+management spec/status cannot bypass a retained private record; the APIReader and
+actual provider-owned accepted bootstrap intent are required for fresh-path absence.
+
 
 `Cluster.spec.paused` or a standard `cluster.x-k8s.io/paused` annotation on any
 authority/member stops observations, activation, new runtime calls and receipt
