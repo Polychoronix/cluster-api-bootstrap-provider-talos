@@ -120,6 +120,18 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 	if e := ValidateManagementActivation(ctx, reader, a, spec); e != nil {
 		return e
 	}
+	if a.Kind == "TalosControlPlane" && tc.Annotations[InitialControlPlaneNameAnnotation] == a.Name && tc.Annotations[InitialControlPlaneUIDAnnotation] == string(a.UID) && m.Spec.Bootstrap.DataSecretName != nil {
+		seed := &corev1.Secret{}
+		if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: *m.Spec.Bootstrap.DataSecretName}, seed) == nil {
+			owner := metav1.GetControllerOf(seed)
+			if accepted, err := DecodeAcceptedIntent(seed.Data[AcceptedIntentKey]); owner != nil && owner.APIVersion == bootstrapv1.GroupVersion.String() && owner.Kind == "TalosConfig" && owner.Name == tc.Name && owner.UID == tc.UID && err == nil && accepted.MachineUID == m.UID && accepted.TalosConfigUID == tc.UID {
+				if err := validateManagementMemberOwners(ctx, reader, m, tc); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+	}
 	_, _, payload, e := readManagement(ctx, reader, a)
 	if e != nil {
 		return e
@@ -184,4 +196,18 @@ func ManagementAcceptedIntent(ctx context.Context, reader client.Reader, a Manag
 		}
 	}
 	return AcceptedIntent{}, managementError("accepted inventory")
+}
+
+func validateManagementMemberOwners(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) error {
+	if !managementController(tc, m) {
+		return managementError("native bootstrap owner")
+	}
+	infra, err := managementInfrastructure(ctx, reader, m)
+	if err != nil {
+		return err
+	}
+	if managementPaused(infra) {
+		return ErrManagementPaused
+	}
+	return nil
 }

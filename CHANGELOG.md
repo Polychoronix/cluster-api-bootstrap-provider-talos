@@ -35,6 +35,9 @@
 - Add generic management API/conversion/schema, immutable disposable-API and real
   mTLS/COSI observation tests; native owner choreography remains separate from
   bootstrap observation and old-installation upgrades are not adoption.
+- Preserve positive native CP successor bootstrap lineage after aggregate activation;
+  imported inventory never becomes permission to recreate a seed or counterfeit
+  native accepted intent, and successors need no duplicated child adoption approval.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

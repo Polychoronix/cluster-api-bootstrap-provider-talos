@@ -73,6 +73,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if tc.Spec.Management != nil || tc.Status.Management != nil {
 			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AuthorityInvalid")
 		}
+		if m.Spec.Bootstrap.DataSecretName != nil || m.Status.NodeRef.IsDefined() { return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "ManagementRequired") }
 		// Normal fresh CP creation may not yet have the TCP controller attached.
 		return false, ctrl.Result{}, nil
 	}
@@ -98,11 +99,26 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if spec.Mode != bootstrapv1.ManagementModeManaged {
 			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AggregateManagementPending")
 		}
+		// A native successor is not a second import. Preserve the existing
+		// positive initial-lineage renderer after aggregate activation; it still
+		// waits for exact Infra ownership before publishing a seed.
+		if m.Spec.Bootstrap.DataSecretName == nil && !m.Status.NodeRef.IsDefined() && tc.Annotations[op.InitialControlPlaneNameAnnotation] == a.Name && tc.Annotations[op.InitialControlPlaneUIDAnnotation] == string(a.UID) {
+			if err := op.ValidateManagementActivation(ctx, r.APIReader, a, spec); err != nil {
+				if errors.Is(err, op.ErrManagementPaused) {
+					return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+				}
+				return true, ctrl.Result{}, err
+			}
+			return false, ctrl.Result{}, nil
+		}
 		if err := op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
 			if errors.Is(err, op.ErrManagementPaused) {
 				return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
 			}
 			return true, ctrl.Result{}, r.managementStatus(ctx, tc, nil, false, false, "AggregateManagementPending")
+		}
+		if tc.Annotations[op.InitialControlPlaneNameAnnotation] == a.Name && tc.Annotations[op.InitialControlPlaneUIDAnnotation] == string(a.UID) && tc.Status.Management == nil {
+			return false, ctrl.Result{}, nil
 		}
 		tc.Status.Management = &bootstrapv1.ManagementStatus{ActivatedRevision: spec.InventoryRevision}
 		return !bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{}, nil

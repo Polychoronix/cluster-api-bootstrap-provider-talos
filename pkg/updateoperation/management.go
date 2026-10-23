@@ -22,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -283,6 +284,17 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	if spec == nil || spec.Mode != bootstrapv1.ManagementModeManaged || spec.Approval == nil {
 		return managementError("management is not activated")
 	}
+	authority := &unstructured.Unstructured{}
+	authority.SetAPIVersion(a.APIVersion)
+	authority.SetKind(a.Kind)
+	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: a.Name}, authority) != nil {
+		return managementError("activation authority lookup")
+	}
+	raw, found, err := unstructured.NestedMap(authority.Object, "spec", "management")
+	live := &bootstrapv1.ManagementSpec{}
+	if err != nil || !found || runtime.DefaultUnstructuredConverter.FromUnstructured(raw, live) != nil || !managementSame(live, spec) {
+		return managementError("activation live manifest changed")
+	}
 	_, r, payload, err := readManagement(ctx, reader, a)
 	if err != nil {
 		return err
@@ -293,6 +305,20 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	safety := &managementSafety{}
 	if json.Unmarshal(payload, safety) != nil {
 		return managementError("activation snapshot decode")
+	}
+	if len(spec.Machines) != len(safety.Members) {
+		return managementError("activated inventory declaration changed")
+	}
+	for _, pin := range spec.Machines {
+		matched := false
+		for _, member := range safety.Members {
+			if pin.Name == member.Machine.Name && pin.UID == member.Machine.UID {
+				matched = true
+			}
+		}
+		if !matched {
+			return managementError("activated inventory declaration changed")
+		}
 	}
 	cluster := &clusterv1.Cluster{}
 	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: safety.ClusterName}, cluster) != nil || cluster.UID != safety.ClusterUID {

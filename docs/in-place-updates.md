@@ -106,6 +106,13 @@ capabilities are observed honestly: missing actual kubelet-image resources remai
 unknown, never replaced by desired image/version. The existing full in-place
 executor's stronger recovery requirements remain unchanged.
 
+An activated TCP's genuinely newly provisioned successor uses the existing
+positive initial-controller/template/Infra ownership lineage before publishing
+bootstrap data. It is not imported again and needs no second child approval.
+Subsequent requests require the actual CABPT-owned seed's accepted intent to
+match that Machine/TC UID pair; a marker or same-named Secret alone is insufficient.
+Original imported members continue to use their immutable activation associations.
+
 ## Enabling it
 
 **CABPT's side is on by default.** `--enable-runtime-extension` defaults to true, and the Service
