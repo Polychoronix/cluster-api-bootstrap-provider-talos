@@ -16,6 +16,10 @@ import (
 // ValidateConfigInputs checks public references without reading or echoing private data.
 func ValidateConfigInputs(path *field.Path, spec TalosConfigSpec) field.ErrorList {
 	var errs field.ErrorList
+	errs = append(errs, ValidateManagementSpec(path.Child("management"), spec.Management)...)
+	if spec.Management != nil && len(spec.Management.Machines) != 1 {
+		errs = append(errs, field.Invalid(path.Child("management", "machines"), "", "TalosConfig requires exactly one Machine identity"))
+	}
 	validateRef := func(p *field.Path, ref *SecretKeyReference) {
 		if ref == nil {
 			return

@@ -169,6 +169,79 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
+              management:
+                description: Management opts an existing node into observation and
+                  approved management.
+                properties:
+                  approval:
+                    description: Approval explicitly authorizes the observed revision.
+                    properties:
+                      observationID:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                      revision:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                    required:
+                    - observationID
+                    - revision
+                    type: object
+                  inventoryRevision:
+                    description: InventoryRevision identifies this non-secret inventory.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                    type: string
+                  machines:
+                    description: Machines pins names to immutable Kubernetes identities.
+                    items:
+                      description: MachineIdentityReference identifies a namespace-local
+                        Machine, not just its name.
+                      properties:
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 1000
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mode:
+                    default: Observe
+                    description: Mode defaults to Observe only when management is
+                      present.
+                    enum:
+                    - Observe
+                    - Managed
+                    type: string
+                required:
+                - inventoryRevision
+                - machines
+                type: object
+                x-kubernetes-validations:
+                - message: Managed requires approval matching inventoryRevision
+                  rule: self.mode != 'Managed' || (has(self.approval) && self.approval.revision
+                    == self.inventoryRevision)
               strategicPatchSecretRefs:
                 description: StrategicPatchSecretRefs are ordered namespace-local
                   private patches.
@@ -230,6 +303,8 @@ spec:
             - message: Secret baselines require none, controlplane or worker
               rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
                 || self.generateType in [''none'', ''controlplane'', ''worker'']'
+            - message: TalosConfig requires exactly one Machine identity
+              rule: '!has(self.management) || size(self.management.machines) == 1'
           status:
             description: TalosConfigStatus defines the observed state of TalosConfig
             properties:
@@ -284,6 +359,32 @@ spec:
 
                   Deprecated: this field will be removed in the next apiVersion.
                 type: string
+              lastHandledReconcileAt:
+                description: LastHandledReconcileAt records the last explicit reconcile
+                  request handled.
+                type: string
+              management:
+                description: Management records inventory observation and activation.
+                properties:
+                  activatedRevision:
+                    type: string
+                  observation:
+                    description: ObservationStatus identifies a completed observation
+                      of the inventory.
+                    properties:
+                      id:
+                        type: string
+                      observedAt:
+                        format: date-time
+                        type: string
+                      revision:
+                        type: string
+                    required:
+                    - id
+                    - observedAt
+                    - revision
+                    type: object
+                type: object
               observedGeneration:
                 description: ObservedGeneration is the latest generation observed
                   by the controller.
@@ -602,6 +703,79 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
+              management:
+                description: Management opts an existing node into observation and
+                  approved management.
+                properties:
+                  approval:
+                    description: Approval explicitly authorizes the observed revision.
+                    properties:
+                      observationID:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                      revision:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                    required:
+                    - observationID
+                    - revision
+                    type: object
+                  inventoryRevision:
+                    description: InventoryRevision identifies this non-secret inventory.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                    type: string
+                  machines:
+                    description: Machines pins names to immutable Kubernetes identities.
+                    items:
+                      description: MachineIdentityReference identifies a namespace-local
+                        Machine, not just its name.
+                      properties:
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 1000
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mode:
+                    default: Observe
+                    description: Mode defaults to Observe only when management is
+                      present.
+                    enum:
+                    - Observe
+                    - Managed
+                    type: string
+                required:
+                - inventoryRevision
+                - machines
+                type: object
+                x-kubernetes-validations:
+                - message: Managed requires approval matching inventoryRevision
+                  rule: self.mode != 'Managed' || (has(self.approval) && self.approval.revision
+                    == self.inventoryRevision)
               strategicPatchSecretRefs:
                 description: StrategicPatchSecretRefs are applied in order after shared
                   public patches.
@@ -674,6 +848,8 @@ spec:
             - message: Secret baselines require none, controlplane or worker
               rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
                 || self.generateType in [''none'', ''controlplane'', ''worker'']'
+            - message: TalosConfig requires exactly one Machine identity
+              rule: '!has(self.management) || size(self.management.machines) == 1'
           status:
             description: TalosConfigStatus defines the observed state of TalosConfig
             properties:
@@ -777,6 +953,32 @@ spec:
                       dataSecretCreated is true when the Machine's bootstrap secret is created.
                       NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
                     type: boolean
+                type: object
+              lastHandledReconcileAt:
+                description: LastHandledReconcileAt records the last explicit reconcile
+                  request handled.
+                type: string
+              management:
+                description: Management records inventory observation and activation.
+                properties:
+                  activatedRevision:
+                    type: string
+                  observation:
+                    description: ObservationStatus identifies a completed observation
+                      of the inventory.
+                    properties:
+                      id:
+                        type: string
+                      observedAt:
+                        format: date-time
+                        type: string
+                      revision:
+                        type: string
+                    required:
+                    - id
+                    - observedAt
+                    - revision
+                    type: object
                 type: object
               observedGeneration:
                 description: |-

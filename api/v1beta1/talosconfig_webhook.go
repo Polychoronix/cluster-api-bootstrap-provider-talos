@@ -22,12 +22,25 @@ import (
 func (r *TalosConfig) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, r).
 		WithValidator(r).
+		WithDefaulter(r).
 		Complete()
 }
 
 //+kubebuilder:webhook:verbs=create;update,path=/validate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfig,mutating=false,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigs,versions=v1beta1,name=vtalosconfig.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*TalosConfig] = &TalosConfig{}
+
+//+kubebuilder:webhook:verbs=create;update,path=/mutate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfig,mutating=true,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigs,versions=v1beta1,name=mtalosconfig.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+
+var _ admission.Defaulter[*TalosConfig] = &TalosConfig{}
+
+// Default preserves legacy bootstrap behavior when management is absent.
+func (r *TalosConfig) Default(_ context.Context, obj *TalosConfig) error {
+	if obj.Spec.Management != nil && obj.Spec.Management.Mode == "" {
+		obj.Spec.Management.Mode = ManagementModeObserve
+	}
+	return nil
+}
 
 // ValidateCreate implements admission.Validator so a webhook will be registered for the type
 func (r *TalosConfig) ValidateCreate(ctx context.Context, obj *TalosConfig) (admission.Warnings, error) {
@@ -67,7 +80,10 @@ func (r *TalosConfig) ValidateUpdate(ctx context.Context, oldObj *TalosConfig, n
 	// through the in-place update flow; for anything else it is a silent no-op.
 	specManagedByController := topology.IsDryRunRequest(req, r) || IsInPlaceUpdate(r) || isTopologyOwned(r)
 
-	if !specManagedByController && !cmp.Equal(r.Spec, old.Spec) {
+	newSpec, oldSpec := r.Spec, old.Spec
+	// Management approval and inventory are mutable independently of bootstrap inputs.
+	newSpec.Management, oldSpec.Management = nil, nil
+	if !specManagedByController && !cmp.Equal(newSpec, oldSpec) {
 		return nil, apierrors.NewBadRequest("TalosConfig.Spec is immutable")
 	}
 

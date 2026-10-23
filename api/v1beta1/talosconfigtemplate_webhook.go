@@ -22,7 +22,7 @@ func (r *TalosConfigTemplate) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-//+kubebuilder:webhook:verbs=update,path=/validate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfigtemplate,mutating=false,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigtemplates,versions=v1beta1,name=vtalosconfigtemplate.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+//+kubebuilder:webhook:verbs=create;update,path=/validate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfigtemplate,mutating=false,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigtemplates,versions=v1beta1,name=vtalosconfigtemplate.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*TalosConfigTemplate] = &TalosConfigTemplate{}
 
@@ -64,6 +64,9 @@ func (r *TalosConfigTemplate) ValidateDelete(ctx context.Context, obj *TalosConf
 func (r *TalosConfigTemplate) validate() error {
 	allErrs := ValidateImageFactory(field.NewPath("spec", "template", "spec", "imageFactory"), r.Spec.Template.Spec.ImageFactory)
 	allErrs = append(allErrs, ValidateConfigInputs(field.NewPath("spec", "template", "spec"), r.Spec.Template.Spec)...)
+	if r.Spec.Template.Spec.Management != nil {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "template", "spec", "management"), "management is only supported on concrete TalosConfigs"))
+	}
 	if len(allErrs) == 0 {
 		return nil
 	}
