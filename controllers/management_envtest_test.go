@@ -194,4 +194,29 @@ func TestManagementControllerObserveApproveAndDesiredOutputDisposableAPI(t *test
 	publicJSON, err := json.Marshal(tc.Status)
 	require.NoError(t, err)
 	require.NotContains(t, string(publicJSON), "MANAGEMENT_PRIVATE_SENTINEL")
+	beforeOutput := append([]byte(nil), output.Data["value"]...)
+	oldNodeUID := node.UID
+	require.NoError(t, api.Delete(t.Context(), node))
+	replacement := node.DeepCopy()
+	replacement.UID = ""
+	replacement.ResourceVersion = ""
+	require.NoError(t, api.Create(t.Context(), replacement))
+	require.NotEqual(t, oldNodeUID, replacement.UID)
+	require.NoError(t, api.Get(t.Context(), client.ObjectKeyFromObject(tc), tc))
+	tc.Spec.ConfigRevision = "after-node-replacement"
+	tc.Spec.StrategicPatches = []string{"machine:\n  env:\n    MANAGEMENT_PRIVATE_SENTINEL: rejected\n"}
+	require.NoError(t, api.Update(t.Context(), tc))
+	require.Eventually(t, func() bool {
+		if api.Get(t.Context(), client.ObjectKeyFromObject(tc), tc) != nil {
+			return false
+		}
+		for _, condition := range tc.Status.Conditions {
+			if condition.Type == bootstrapv1.ManagementActivatedCondition && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == tc.Generation {
+				return true
+			}
+		}
+		return false
+	}, 20*time.Second, 50*time.Millisecond)
+	require.NoError(t, api.Get(t.Context(), client.ObjectKeyFromObject(output), output))
+	require.Equal(t, beforeOutput, output.Data["value"], "recreated Node UID cannot render new adopted output")
 }

@@ -48,6 +48,9 @@
 - Bind immutable observations to normalized live authority policy, including TCP
   desired templates, versions and per-Machine overrides; approval-only changes do
   not alter opaque observation identity and association permits only attested refs.
+- Require actual preserved workload Node UID for managed adopted members while
+  allowing reviewed next desired inputs and harmless identity/seed metadata churn
+  after full initial ownership; original seed UID and bytes remain immutable.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

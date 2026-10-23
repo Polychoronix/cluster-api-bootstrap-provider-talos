@@ -166,11 +166,14 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 			if infra.GetUID() != member.Infrastructure.UID {
 				return managementError("activated infrastructure identity")
 			}
+			if err := validateManagementNode(ctx, reader, safety, &member); err != nil {
+				return err
+			}
 			if m.Spec.Bootstrap.DataSecretName == nil || *m.Spec.Bootstrap.DataSecretName != member.Seed.Name {
 				return managementError("original seed reference changed")
 			}
 			seed := &corev1.Secret{}
-			if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: member.Seed.Name}, seed) != nil || !managementSame(managementSource(seed, member.Seed.Key), member.Seed) {
+			if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: member.Seed.Name}, seed) != nil || !sameManagementIdentity(managementSource(seed, member.Seed.Key), member.Seed) {
 				return managementError("original seed identity changed")
 			}
 			return nil

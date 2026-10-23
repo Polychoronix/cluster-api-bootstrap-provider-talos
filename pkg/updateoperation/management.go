@@ -345,7 +345,7 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	}
 	for _, source := range safety.Inputs {
 		secret := &corev1.Secret{}
-		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !managementSame(managementSource(secret, source.Key), source) {
+		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !sameManagementIdentity(managementSource(secret, source.Key), source) {
 			return managementError("activated management source changed")
 		}
 	}

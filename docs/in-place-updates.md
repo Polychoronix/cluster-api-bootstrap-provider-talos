@@ -111,6 +111,12 @@ Missing input/association observations retry at the existing bounded reconciliat
 cadence. Successful Observe does not establish periodic drift enforcement. Removing
 management spec/status cannot bypass a retained private record; the APIReader and
 actual provider-owned accepted bootstrap intent are required for fresh-path absence.
+After full initial ownership, reviewed current target config/template/source changes
+do not require a second adoption approval or comparison to the original raw desired
+policy forever. Durable identity checks still require the actual workload Node UID,
+providerID, exact TC/Infra Machine owners, and original seed UID/bytes. Metadata-only
+Secret resourceVersion churn is harmless for durable identity/seed guards; initial
+observation/approval and requested render freshness retain exact source receipts.
 
 
 `Cluster.spec.paused` or a standard `cluster.x-k8s.io/paused` annotation on any

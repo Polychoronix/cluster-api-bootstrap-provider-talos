@@ -55,6 +55,7 @@ type managementRPC struct {
 	members []*machineapi.EtcdMember
 	self    uint64
 	leader  uint64
+	nodeUID types.UID
 }
 
 func (s *managementRPC) EtcdMemberList(context.Context, *machineapi.EtcdMemberListRequest) (*machineapi.EtcdMemberListResponse, error) {
@@ -182,8 +183,11 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 			json.NewEncoder(w).Encode(&corev1.NodeList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "NodeList"}, Items: nodes})
 			return
 		}
-		for _, n := range nodes {
+		for i, n := range nodes {
 			if strings.HasSuffix(r.URL.Path, "/nodes/"+n.Name) {
+				if servers[i].nodeUID != "" {
+					n.UID = servers[i].nodeUID
+				}
 				n.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Node"}
 				json.NewEncoder(w).Encode(n)
 				return
