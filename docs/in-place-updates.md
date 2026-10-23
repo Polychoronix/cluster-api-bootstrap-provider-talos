@@ -51,6 +51,61 @@ commits to the in-place path there is no fallback to replacement, so a node that
 returns from an upgrade reboot would otherwise hang. One hard power cycle is attempted, after
 which the update is left failed for an operator to inspect.
 
+## Declarative existing-node management
+
+An existing standalone Machine can use `TalosConfig.spec.management` without
+regenerating its installed bootstrap seed. Keep the Machine/Cluster/TC unpaused,
+retain its original `bootstrap.dataSecretName`, and associate an explicitly
+Observe TalosConfig before enabling a MachineDeployment/MachineSet. The core
+controller must already have settled the TC and InfraMachine controller owners
+on the exact Machine UID. Observe never creates associations or infrastructure.
+
+```yaml
+management:
+  mode: Observe
+  inventoryRevision: import-1
+  machines:
+    - name: existing-worker
+      uid: <existing-machine-uid>
+```
+
+The configuration must use a complete namespace-local Secret baseline and an
+explicit Talos management endpoint; standard workload kubeconfig and Talos mTLS
+Secrets must already exist. Observation compares complete active configuration,
+actual Node/provider identity and runtime evidence. `InventoryVerified` and
+`ManagementActivated` are distinct from bootstrap and operational Ready.
+No Secret contents or private fingerprints appear in public status or errors.
+
+After reviewing `status.management.observation`, author `mode: Managed` and
+`approval: {revision: import-1, observationID: <observed-id>}`. Approval requires
+a fresh uncached match of the immutable private snapshot; its public ID is opaque,
+not a Secret UID or content digest. Approval/mode/requestedAt and generation-only
+churn do not change unchanged observation identity. There is no TTL, periodic
+drift enforcement, renewal consent or additional per-operation approval API.
+Deleting/replacing a private snapshot cannot renew old approval at the same revision.
+
+TCP consumers use the same exported ManagementSpec/ManagementStatus once for the
+complete configured Machine inventory. Observation does not require TCP ownership,
+but TC/Infra children must be owned by each exact Machine. All actual etcd members
+are collected independently, associated to Nodes/Machines and checked for consistent
+healthy voting views; unmatched, duplicated or learner membership fails closed.
+No fixed control-plane count or unseen-member cleanup is inferred.
+
+`Cluster.spec.paused` or a standard `cluster.x-k8s.io/paused` annotation on any
+authority/member stops observations, activation, new runtime calls and receipt
+cleanup. Only the standard Paused condition may be refreshed; historical inventory
+timestamps and reconcile-request status do not advance. `reconcile.fluxcd.io/requestedAt`
+is optional reobservation, never authorization or a pause bypass. No Flux dependency
+or separate observer is required. Already accepted remote work cannot be undone.
+
+Native replacement remains CAPI owner/template/replica/rollout-budget work, not
+a TC veto over MD/MS deletion. Stage and verify that owner choreography separately.
+New native Machines boot the reviewed target Talos release; upgrading an old
+installation first is not adoption or native provisioning. Older read-only
+capabilities are observed honestly: missing actual kubelet-image resources remain
+unknown, never replaced by desired image/version. The existing full in-place
+executor's stronger recovery requirements remain unchanged.
+
 ## Enabling it
 
 **CABPT's side is on by default.** `--enable-runtime-extension` defaults to true, and the Service

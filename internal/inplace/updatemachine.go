@@ -20,6 +20,7 @@ import (
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
+	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 )
 
 const (
@@ -60,6 +61,9 @@ func (h *Handler) desiredConfig(ctx context.Context, requested *clusterv1.Machin
 	config := &bootstrapv1beta1.TalosConfig{}
 	if err := h.reader.Get(ctx, types.NamespacedName{Namespace: machine.Namespace, Name: ref.Name}, config); err != nil {
 		return nil, false, fmt.Errorf("configuration input TalosConfig: lookup failed")
+	}
+	if err := op.ValidateManagedMachine(ctx, h.reader, machine, config); err != nil {
+		return nil, false, err
 	}
 	obj, err := rawToUnstructured(bootstrapConfig)
 	if err != nil || obj == nil {

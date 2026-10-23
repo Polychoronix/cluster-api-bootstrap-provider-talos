@@ -201,6 +201,9 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			dataSecretName = scope.Config.Name + "-update-data"
 		}
 	}
+	if scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" {
+		dataSecretName = scope.Config.Name + "-update-data"
+	}
 
 	r.Log.Info("handling bootstrap data for ", "owner", ownerName)
 
@@ -280,6 +283,25 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			return "", err
 		}
 		intent, err := updateoperation.EncodeAcceptedIntent(updateoperation.AcceptedIntent{MachineUID: scope.ConfigOwner.GetUID(), TalosConfigUID: scope.Config.UID, Image: image})
+		if err != nil {
+			return "", err
+		}
+		certSecret.Data[updateoperation.AcceptedIntentKey] = intent
+	}
+	if !initial && scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" && !scope.ConfigOwner.IsMachinePool() {
+		machine := &capiv1.Machine{}
+		if r.APIReader == nil || r.APIReader.Get(ctx, client.ObjectKey{Namespace: scope.Config.Namespace, Name: ownerName}, machine) != nil {
+			return "", fmt.Errorf("Talos management live Machine lookup failed")
+		}
+		authority, _, err := updateoperation.ManagementAuthorityForMachine(ctx, r.APIReader, machine, scope.Config)
+		if err != nil {
+			return "", err
+		}
+		accepted, err := updateoperation.ManagementAcceptedIntent(ctx, r.APIReader, authority, machine, scope.Config)
+		if err != nil {
+			return "", err
+		}
+		intent, err := updateoperation.EncodeAcceptedIntent(accepted)
 		if err != nil {
 			return "", err
 		}

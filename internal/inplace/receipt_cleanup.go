@@ -31,6 +31,9 @@ func (h *Handler) consumeMachineReceipt(ctx context.Context, m *clusterv1.Machin
 	if h.reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: ref.Name}, config) != nil {
 		return fmt.Errorf("receipt cleanup config lookup failed")
 	}
+	if err := op.ValidateManagedMachine(ctx, h.reader, m, config); err != nil {
+		return err
+	}
 	identity := objectIdentity(bootstrapv1.GroupVersion.Group, "TalosConfig", config)
 	secret, j, err := op.ReadJournal(ctx, h.reader, m.Namespace, identity)
 	if err == op.ErrNotFound {

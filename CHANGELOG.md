@@ -26,6 +26,16 @@
   InfraMachine ownership after bootstrap reconciliation; never retroactively
   create accepted intent on an already published seed.
 
+- Add shared declarative Observe/Managed inventory and exact manifest approval,
+  immutable private safety snapshots and opaque stable observation IDs; reuse
+  complete-config/Talos transport for standalone and aggregate TCP observation.
+- Preserve original seeds and imported identity; fence paused/Observe authorities
+  before bootstrap/client/runtime/receipt writes. Keep actual etcd membership
+  independent of configured inventory and reject unaccounted/learner membership.
+- Add generic management API/conversion/schema, immutable disposable-API and real
+  mTLS/COSI observation tests; native owner choreography remains separate from
+  bootstrap observation and old-installation upgrades are not adoption.
+
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 
 Welcome to the v0.7.0-alpha.2 release of CAPI Bootstrap Provider Talos!  

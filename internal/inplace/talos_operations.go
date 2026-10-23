@@ -9,17 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
-	"github.com/cosi-project/runtime/pkg/resource"
-	"github.com/cosi-project/runtime/pkg/safe"
-	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
-	configresource "github.com/siderolabs/talos/pkg/machinery/resources/config"
-	k8sresource "github.com/siderolabs/talos/pkg/machinery/resources/k8s"
-	runtimeresource "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 
 	endpointclient "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/talosclient"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
@@ -31,86 +24,20 @@ var _ OperationNode = (*talosNodeClient)(nil)
 // config. All identities are runtime observations; Talos exposes no booted
 // installer OCI digest, and a kubelet image is not workload Node readiness.
 func (t *talosNodeClient) Observe(ctx context.Context) (NodeObservation, error) {
-	ctx = endpointclient.WithNode(ctx, t.endpoint)
-	var observation NodeObservation
-
-	boot, err := safe.StateGetByID[*runtimeresource.BootID](ctx, t.client.COSI, runtimeresource.BootIDID)
-	if err != nil || boot == nil || strings.TrimSpace(boot.TypedSpec().BootID) == "" {
-		return NodeObservation{}, errors.New("Talos boot identity observation failed")
-	}
-	observation.BootID = boot.TypedSpec().BootID
-
-	active, err := safe.StateGetByID[*configresource.MachineConfig](ctx, t.client.COSI, configresource.ActiveID)
-	if err != nil || active == nil || active.Provider() == nil {
-		return NodeObservation{}, errors.New("Talos active configuration observation failed")
-	}
-	observation.Configuration, err = active.Provider().Bytes()
-	if err != nil || len(observation.Configuration) == 0 {
-		return NodeObservation{}, errors.New("Talos active configuration serialization failed")
-	}
-
-	version, err := safe.StateGetByID[*runtimeresource.Version](ctx, t.client.COSI, "version")
-	if err != nil || version == nil || strings.TrimSpace(version.TypedSpec().Version) == "" {
-		return NodeObservation{}, errors.New("Talos runtime version observation failed")
-	}
-	observation.OSVersion = version.TypedSpec().Version
-
-	schematic, err := safe.StateGetByID[*runtimeresource.ImageFactorySchematic](ctx, t.client.COSI, runtimeresource.ImageFactorySchematicID)
-	switch {
-	case state.IsNotFoundError(err):
-		// Non-Image-Factory installations legitimately have no schematic resource.
-	case err != nil || schematic == nil:
-		return NodeObservation{}, errors.New("Talos schematic observation failed")
-	default:
-		observation.SchematicID = schematic.TypedSpec().SchematicID
-	}
-
-	extensionKind := resource.NewMetadata(runtimeresource.NamespaceName, runtimeresource.ExtensionStatusType, "", resource.VersionUndefined)
-	extensions, err := t.client.COSI.List(ctx, extensionKind)
+	actual, err := endpointclient.Observe(ctx, t.client, t.endpoint)
 	if err != nil {
-		return NodeObservation{}, errors.New("Talos extension observation failed")
+		return NodeObservation{}, err
 	}
-	observation.Extensions = make([]ExtensionObservation, 0, len(extensions.Items))
-	for _, item := range extensions.Items {
-		extension, ok := item.(*runtimeresource.ExtensionStatus)
-		if !ok || extension == nil {
-			return NodeObservation{}, errors.New("Talos extension observation failed")
-		}
-		layer := extension.TypedSpec()
-		if layer.Metadata.Name == "" || layer.Metadata.Version == "" || layer.Image == "" {
-			return NodeObservation{}, errors.New("Talos extension identity observation failed")
-		}
-		observation.Extensions = append(observation.Extensions, ExtensionObservation{Name: layer.Metadata.Name, Version: layer.Metadata.Version, Image: layer.Image})
-	}
-	slices.SortFunc(observation.Extensions, func(a, b ExtensionObservation) int {
-		if n := strings.Compare(a.Name, b.Name); n != 0 {
-			return n
-		}
-		if n := strings.Compare(a.Version, b.Version); n != 0 {
-			return n
-		}
-		return strings.Compare(a.Image, b.Image)
-	})
-
-	// Machinery 1.14 does not export a singleton ID for KubeletStatus. Require
-	// exactly one actual resource instead of guessing an ID or using desired config.
-	kubeletKind := resource.NewMetadata(k8sresource.NamespaceName, k8sresource.KubeletStatusType, "", resource.VersionUndefined)
-	kubelets, err := t.client.COSI.List(ctx, kubeletKind)
-	if err != nil || len(kubelets.Items) != 1 {
+	// Requested in-place completion requires the actual kubelet image. Read-only
+	// adoption may observe older capabilities without inventing this evidence.
+	if actual.KubeletImage == "" {
 		return NodeObservation{}, errors.New("Talos kubelet runtime observation failed")
 	}
-	kubelet, ok := kubelets.Items[0].(*k8sresource.KubeletStatus)
-	if !ok || kubelet == nil || strings.TrimSpace(kubelet.TypedSpec().Image) == "" {
-		return NodeObservation{}, errors.New("Talos kubelet runtime observation failed")
+	observation := NodeObservation{Configuration: actual.Configuration, BootID: actual.BootID, OSVersion: actual.OSVersion, KubeletImage: actual.KubeletImage, SchematicID: actual.SchematicID}
+	observation.Extensions = make([]ExtensionObservation, len(actual.Extensions))
+	for i, extension := range actual.Extensions {
+		observation.Extensions[i] = ExtensionObservation{Name: extension.Name, Version: extension.Version, Image: extension.Image}
 	}
-	observation.KubeletImage = kubelet.TypedSpec().Image
-
-	// A reboot during these reads would combine evidence from different boots.
-	boot, err = safe.StateGetByID[*runtimeresource.BootID](ctx, t.client.COSI, runtimeresource.BootIDID)
-	if err != nil || boot == nil || boot.TypedSpec().BootID != observation.BootID {
-		return NodeObservation{}, errors.New("Talos boot identity changed during observation")
-	}
-
 	return observation, nil
 }
 

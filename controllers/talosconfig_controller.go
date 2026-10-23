@@ -148,6 +148,10 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	if handled, result, err := r.reconcileManagementEarly(ctx, config); handled || err != nil {
+		return result, err
+	}
+
 	// Initialize the patch helper
 	patchHelper, err := patch.NewHelper(config, r.Client)
 	if err != nil {
@@ -303,7 +307,7 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Reconcile status for machines that already have a secret reference, but our status isn't up to date.
 	// This case solves the pivoting scenario (or a backup restore) which doesn't preserve the status subresource on objects.
-	if owner.DataSecretName() != nil && (!ptr.Deref(config.Status.Initialization.DataSecretCreated, false) || config.Status.DataSecretName == "") {
+	if owner.DataSecretName() != nil && (config.Status.Management == nil || config.Status.Management.ActivatedRevision == "") && (!ptr.Deref(config.Status.Initialization.DataSecretCreated, false) || config.Status.DataSecretName == "") {
 		config.Status.Initialization.DataSecretCreated = ptr.To(true)
 		config.Status.DataSecretName = *owner.DataSecretName()
 
@@ -384,7 +388,7 @@ func (r *TalosConfigReconciler) reconcileGenerate(ctx context.Context, scope *Ta
 	if err != nil {
 		return err
 	}
-	if inputs.HasBaseline() {
+	if inputs.HasBaseline() && (scope.Config.Status.Management == nil || scope.Config.Status.Management.ActivatedRevision == "") {
 		if err := r.reconcileBaselineIdentity(ctx, scope, rendered.Data()); err != nil {
 			return err
 		}
