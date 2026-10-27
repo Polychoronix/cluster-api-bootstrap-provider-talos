@@ -27,7 +27,7 @@ func TestManagedAdoptedNodeUIDAndReviewedNextRequest(t *testing.T) {
 	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: r.Authority.Namespace, Name: r.Authority.Name}, tcp))
 	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(r.Spec)
 	require.NoError(t, err)
-	tcp.Object["spec"] = map[string]any{"management": raw}
+	tcp.Object["spec"].(map[string]any)["management"] = raw
 	require.NoError(t, c.Update(t.Context(), tcp))
 	_, err = associateAll(t, c, c, r)
 	require.NoError(t, err)

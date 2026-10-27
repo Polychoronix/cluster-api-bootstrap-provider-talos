@@ -30,7 +30,7 @@ func TestManagementNativeSuccessorRequiresRealAcceptedSeed(t *testing.T) {
 	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "tenant", Name: "controlplane"}, tcp))
 	raw, e := runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 	require.NoError(t, e)
-	tcp.Object["spec"] = map[string]any{"management": raw}
+	tcp.Object["spec"].(map[string]any)["management"] = raw
 	require.NoError(t, c.Update(t.Context(), tcp))
 	_, e = associateAll(t, c, c, request)
 	require.NoError(t, e)

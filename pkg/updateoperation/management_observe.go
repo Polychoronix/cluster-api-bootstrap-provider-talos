@@ -63,6 +63,9 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if request.Cluster == nil || request.Spec == nil || len(bootstrapv1.ValidateManagementSpec(field.NewPath("management"), request.Spec)) != 0 {
 		return nil, managementError("request")
 	}
+	if request.Authority.Kind == "TalosControlPlane" && len(request.EffectiveTalosConfigs) == 0 {
+		return nil, managementError("effective TCP input required")
+	}
 	a := request.Authority
 	cluster := &clusterv1.Cluster{}
 	if request.Cluster.Namespace != a.Namespace || reader.Get(ctx, client.ObjectKeyFromObject(request.Cluster), cluster) != nil || cluster.UID != request.Cluster.UID || cluster.UID == "" || !cluster.DeletionTimestamp.IsZero() {

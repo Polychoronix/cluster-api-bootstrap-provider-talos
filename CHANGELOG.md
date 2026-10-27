@@ -60,6 +60,9 @@
 - Add separate deleting-authority retirement validation for exact activated or
   proved fresh native lineage; pending owner/update/receipt work, Observe, foreign
   identities and pause still hold, while clean consumed lifecycle may delete.
+- Require explicit effective TCP inputs before observation/approval and validate
+  untyped shared/override policies with common reference and inventory rules;
+  missing policy, duplicates and overlay conflicts never select live-TC fallback.
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

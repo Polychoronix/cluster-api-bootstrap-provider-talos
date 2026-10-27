@@ -202,7 +202,9 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 	require.NoError(t, e)
 	tcp.Object["spec"] = map[string]any{"management": managementMap}
 	objects = append(objects, tcp)
-	return &assigningClient{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()}, request, servers
+	management := &assigningClient{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()}
+	setEffectivePolicy(t, management, management, &request, false, false)
+	return management, request, servers
 }
 
 func TestObserveManagementUnownedTCPGenericTopologyAndApproval(t *testing.T) {
@@ -223,7 +225,7 @@ func TestObserveManagementUnownedTCPGenericTopologyAndApproval(t *testing.T) {
 			require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "tenant", Name: "controlplane"}, tcp))
 			m, e := runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 			require.NoError(t, e)
-			tcp.Object["spec"] = map[string]any{"management": m}
+			tcp.Object["spec"].(map[string]any)["management"] = m
 			tcp.SetGeneration(tcp.GetGeneration() + 1)
 			tcp.SetAnnotations(map[string]string{"reconcile.fluxcd.io/requestedAt": "approve"})
 			require.NoError(t, c.Update(t.Context(), tcp))

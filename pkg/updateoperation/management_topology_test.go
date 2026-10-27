@@ -49,7 +49,7 @@ func TestManagementApprovalRejectsStaleSourceAndUID(t *testing.T) {
 			require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "tenant", Name: "controlplane"}, tcp))
 			raw, e := runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 			require.NoError(t, e)
-			tcp.Object["spec"] = map[string]any{"management": raw}
+			tcp.Object["spec"].(map[string]any)["management"] = raw
 			require.NoError(t, c.Update(t.Context(), tcp))
 			switch kind {
 			case "source":
@@ -73,7 +73,7 @@ func TestManagementApprovalRejectsStaleSourceAndUID(t *testing.T) {
 				request.Spec.Approval.ObservationID = "wrong"
 				raw, e = runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 				require.NoError(t, e)
-				tcp.Object["spec"] = map[string]any{"management": raw}
+				tcp.Object["spec"].(map[string]any)["management"] = raw
 				require.NoError(t, c.Update(t.Context(), tcp))
 			}
 			_, e = ActivateManagement(t.Context(), c, c, request)

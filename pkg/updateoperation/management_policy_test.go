@@ -37,6 +37,14 @@ func TestManagementLiveAuthorityPolicyChangesInvalidateObservation(t *testing.T)
 			}
 			require.NoError(t, c.Update(t.Context(), tcp))
 			next, err := ObserveManagement(t.Context(), c, r)
+			if policy == "controlPlaneConfig" || policy == "machineConfigOverrides" {
+				require.Error(t, err, "changed desired configuration cannot silently observe unchanged live TC")
+				require.Nil(t, next)
+				retained, lookupErr := ReadManagementStatus(t.Context(), c, r.Authority)
+				require.NoError(t, lookupErr)
+				require.Equal(t, first.Observation.ID, retained.Observation.ID)
+				return
+			}
 			require.NoError(t, err)
 			second, err := RecordManagementObservation(t.Context(), c, c, next)
 			require.NoError(t, err)

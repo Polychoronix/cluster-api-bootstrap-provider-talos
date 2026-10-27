@@ -29,7 +29,7 @@ func approveManagementFixture(t *testing.T, count int) (*assigningClient, Manage
 	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: request.Authority.Namespace, Name: request.Authority.Name}, tcp))
 	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
 	require.NoError(t, err)
-	tcp.Object["spec"] = map[string]any{"management": raw}
+	tcp.Object["spec"].(map[string]any)["management"] = raw
 	require.NoError(t, c.Update(t.Context(), tcp))
 	return c, request
 }

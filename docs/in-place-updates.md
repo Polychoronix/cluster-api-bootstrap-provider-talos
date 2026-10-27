@@ -105,6 +105,12 @@ Both actual live spec and effective spec/source receipts stay in the private
 snapshot. Different live/effective representations may be semantically equivalent;
 unapplied shared or node-private policy differences fail observation, never trigger
 TC rewrites or Apply. Effective Secret rotation invalidates unconsumed approval.
+Effective inputs are required for TCP observation and approval; omitting them is
+a hard refusal before workload/Talos reads, not a fallback to unchanged live TC
+specs. A standalone TC may default to its own live spec. Untyped authority policy
+still undergoes common input/inventory validation: duplicate names/UIDs, foreign
+inventory entries, malformed references or overlay+shared MachineConfig conflicts
+are rejected rather than silently selecting a last override.
 
 Initial TCP owner transfer uses the shared private aggregate association transaction:
 `PrepareManagementAssociation` validates original approval and full fresh snapshot,

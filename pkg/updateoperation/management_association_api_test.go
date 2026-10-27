@@ -97,6 +97,28 @@ func TestManagementAssociationTwoMemberDisposableAPIRestart(t *testing.T) {
 	require.NoError(t, api.Create(t.Context(), sharedPolicy))
 	require.NoError(t, api.Create(t.Context(), nodePolicy))
 	setEffectivePolicy(t, api, api, &request, true, true)
+	missingEffective := request
+	missingEffective.EffectiveTalosConfigs = nil
+	_, err = ObserveManagement(t.Context(), api, missingEffective)
+	require.ErrorContains(t, err, "effective TCP input required")
+	_, err = ReadManagementStatus(t.Context(), api, request.Authority)
+	require.ErrorIs(t, err, ErrManagementRecordNotFound)
+	for _, malformed := range []string{"duplicate", "conflict"} {
+		require.NoError(t, api.Get(t.Context(), client.ObjectKeyFromObject(tcp), tcp))
+		policy := tcp.Object["spec"].(map[string]any)
+		if malformed == "duplicate" {
+			overrides := policy["machineConfigOverrides"].([]any)
+			policy["machineConfigOverrides"] = append(overrides, overrides[0])
+		} else {
+			policy["controlPlaneConfig"].(map[string]any)["controlplane"].(map[string]any)["machineConfig"] = map[string]any{"configRevision": "conflicting-shared-slot"}
+		}
+		require.NoError(t, api.Update(t.Context(), tcp))
+		_, err = ObserveManagement(t.Context(), api, request)
+		require.Error(t, err)
+		_, err = ReadManagementStatus(t.Context(), api, request.Authority)
+		require.ErrorIs(t, err, ErrManagementRecordNotFound)
+		setEffectivePolicy(t, api, api, &request, true, true)
+	}
 	_, err = ObserveManagement(t.Context(), api, request)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "PRIVATE_SHARED_POLICY")
