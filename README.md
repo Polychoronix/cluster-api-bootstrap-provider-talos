@@ -85,38 +85,86 @@ match the approved CABPT fork release exactly before integrating either provider
 
 ## Installing
 
-CABPT provider should be installed alongside with [CACPPT](https://github.com/sidero-community/cluster-api-control-plane-provider-talos) provider.
+Install this CABPT fork only with the matched
+[`Polychoronix/cluster-api-control-plane-provider-talos`](https://github.com/Polychoronix/cluster-api-control-plane-provider-talos)
+fork and its exact CABPT dependency. **The current integration branch is
+source-only: no matched personal-fork provider release is published yet.** A
+public source commit, local component render or successful native build is not
+an available image or provider release. Do not use the community provider catalog
+or a `latest` release as an accidental substitute.
 
-```shell
-clusterctl init --bootstrap talos --control-plane talos --infrastructure <infrastructure provider>
-```
+After separately approving and publishing both matched releases, verify their
+component/metadata checksums, actual image digests and required image visibility
+or pull access. Select that exact approved version and the personal-fork sources
+explicitly. The examples below use `v0.9.0-craci.1` **only as a candidate/example**;
+they describe the standard GitHub release-asset layout, not currently published
+assets. Replace the example version everywhere with the actual approved
+published version before running an installation.
 
-If you encounter the following error, this is caused by a rename of our GitHub org from `talos-systems` to `siderolabs`.
-
-```bash
-$ clusterctl init -b talos -c talos -i sidero
-Fetching providers
-Error: failed to get provider components for the "talos" provider: target namespace can't be defaulted. Please specify a target namespace
-```
-
-This can be worked around by adding the following to `~/.cluster-api/clusterctl.yaml` and rerunning the init command:
+For `clusterctl`, configure its supported provider-source overrides in
+`~/.cluster-api/clusterctl.yaml` (preserve any unrelated entries):
 
 ```yaml
 providers:
-  - name: "talos"
-    url: "https://github.com/sidero-community/cluster-api-bootstrap-provider-talos/releases/latest/bootstrap-components.yaml"
-    type: "BootstrapProvider"
-  - name: "talos"
-    url: "https://github.com/sidero-community/cluster-api-control-plane-provider-talos/releases/latest/control-plane-components.yaml"
-    type: "ControlPlaneProvider"
-  - name: "sidero"
-    url: "https://github.com/siderolabs/sidero/releases/latest/infrastructure-components.yaml"
-    type: "InfrastructureProvider"
+  - name: talos
+    type: BootstrapProvider
+    url: https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos/releases/download/v0.9.0-craci.1/bootstrap-components.yaml
+  - name: talos
+    type: ControlPlaneProvider
+    url: https://github.com/Polychoronix/cluster-api-control-plane-provider-talos/releases/download/v0.9.0-craci.1/control-plane-components.yaml
 ```
+
+Then use the same published version explicitly for both providers, with an
+independently reviewed infrastructure provider/version:
+
+```sh
+: "${TALOS_PROVIDER_VERSION:?Set the approved matched published version}"
+: "${INFRASTRUCTURE_PROVIDER:?Set the reviewed infrastructure provider:version}"
+clusterctl init \
+  --core cluster-api:v1.14.2 \
+  --bootstrap "talos:$TALOS_PROVIDER_VERSION" \
+  --control-plane "talos:$TALOS_PROVIDER_VERSION" \
+  --infrastructure "$INFRASTRUCTURE_PROVIDER"
+```
+
+For installations managed by Cluster API Operator, configure the existing
+`BootstrapProvider` and `ControlPlaneProvider` resources instead of running a
+second installer. Use its supported
+[`spec.version` and `spec.fetchConfig.url` configuration](https://cluster-api-operator.sigs.k8s.io/topics/configuration/provider-spec-configuration)
+with the same approved published version. Operator fetch URLs are repository
+**release endpoints**, not the direct component-file URLs used above:
+
+| Operator resource | `spec.version` | `spec.fetchConfig.url` |
+|---|---|---|
+| `BootstrapProvider/talos` | Actual approved matched version | `https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos/releases` |
+| `ControlPlaneProvider/talos` | Same approved matched version | `https://github.com/Polychoronix/cluster-api-control-plane-provider-talos/releases` |
+
+Keep the reviewed provider namespaces, configuration and adoption/rollout gates.
+These standard source overrides do not authorize replacing a live provider,
+adopting Machines or disrupting nodes; those remain separately reviewed steps.
 
 ## Compatibility
 
-This provider's versions are compatible with the following versions of Cluster API:
+### Current modified fork
+
+The current fork targets CAPI **1.14.2 / v1beta2**. Local verification covers
+Talos **1.14** complete-config rendering, imported mTLS transport, management
+observation and journaled update/recovery contracts with isolated API/runtime
+tests. This is not a claim of published images, live rollout validation or full
+legacy Talos runtime support. The OS-install observation contract is currently
+1.14; older capability support remains unresolved until equivalent observations
+are implemented and tested. See the actual
+[in-place change/runtime capability matrix](docs/in-place-updates.md#what-can-be-updated-in-place)
+and [existing-node management contract](docs/in-place-updates.md#declarative-existing-node-management).
+
+### Historical community release series
+
+The preserved tables below describe the historical community releases, not the
+modified personal fork's verified runtime/adoption capabilities. A historical
+checkmark must not be used to infer lifecycle support for an older Talos version
+after this cutover.
+
+Historical Cluster API compatibility:
 
 |                | v1alpha3 (v0.3) | v1alpha4 (v0.4) | v1beta1 (v1.x) | v1beta2 (v1.12+) |
 | -------------- | --------------- | --------------- | -------------- | ---------------- |
@@ -126,7 +174,7 @@ This provider's versions are compatible with the following versions of Cluster A
 | CABPT (v0.8.x) |                 |                 |                | ✓                |
 | CABPT (v0.9.x) |                 |                 |                | ✓                |
 
-This provider's versions are able to install and manage the following versions of Kubernetes:
+Historical Kubernetes installation/configuration support:
 
 |                | v1.19 | v1.20 | v1.21 | v1.22 | v1.23 | v1.24 | v1.25 | v1.26 | v1.27 | v1.28 | v1.29 | v1.30 | v1.31 | v1.32 | v1.33 | v1.34 | v1.35 | v1.36 | v1.37 |
 | -------------- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
@@ -136,7 +184,7 @@ This provider's versions are able to install and manage the following versions o
 | CABPT (v0.8.x) |       |       |       |       |       |       |       |       |       |       | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     |       |
 | CABPT (v0.9.x) |       |       |       |       |       |       |       |       |       |       | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     | ✓     |
 
-This provider's versions are compatible with the following versions of Talos:
+Historical Talos configuration compatibility:
 
 |                  | v1.0  | v1.1  | v1.2  | v1.3  | v1.4  | v1.5  | v1.6  | v1.7  | v1.8  | v1.9  | v1.10 | v1.11 | v1.12 | v1.13 | v1.14 |
 | ---------------- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
@@ -146,7 +194,10 @@ This provider's versions are compatible with the following versions of Talos:
 | CABPT (v0.8.x)   |       |       |       |       |       |       |       |       |       |       | ✓     | ✓     | ✓     | ✓     |       |
 | CABPT (v0.9.x)   |       |       |       |       |       |       |       |       |       |       | ✓     | ✓     | ✓     | ✓     | ✓     |
 
-CABPT generates machine configuration compatible with Talos Linux version specified in the `talosVersion:` field (see below).
+The `talosVersion` field requests the machine-configuration generation contract
+(see below). A generated or parseable configuration is not proof of observation,
+upgrade, downgrade or recovery support for that OS version; use the current fork
+capability matrix above.
 
 ## Usage
 
