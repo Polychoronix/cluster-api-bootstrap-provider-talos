@@ -76,6 +76,15 @@ actual Node/provider identity and runtime evidence. `InventoryVerified` and
 `ManagementActivated` are distinct from bootstrap and operational Ready.
 No Secret contents or private fingerprints appear in public status or errors.
 
+Management inventory and approval belong on concrete TalosConfigs, never on
+TalosConfigTemplates. Both served API schemas reject template management,
+including Observe mode, so a template cannot carry node-specific inventory or
+consent into future Machines. The schema source markers preserve this rule when
+regenerating CRDs. Both `v1alpha3` and `v1beta1` expose management and its public
+status; approval and status edits through a served alpha client take precedence
+over older conversion-data, including when that annotation is absent.
+
+
 After reviewing `status.management.observation`, author `mode: Managed` and
 `approval: {revision: import-1, observationID: <observed-id>}`. Approval requires
 a fresh uncached match of the immutable private snapshot; its public ID is opaque,

@@ -32,6 +32,7 @@ import (
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -162,6 +163,7 @@ func TestConfigInputControllerDisposableEnvtest(t *testing.T) {
 		},
 	}
 	require.NoError(t, apiClient.Create(ctx, machineObject))
+	smokeManagementAdmissionAndServedConversion(t, ctx, apiClient, namespace, machineObject)
 	cfg := &bootstrapv1.TalosConfig{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: machineObject.Name, OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(machineObject, clusterv1.GroupVersion.WithKind("Machine"))}},
 		Spec: bootstrapv1.TalosConfigSpec{
@@ -354,4 +356,84 @@ func smokeRenderedHostname(t *testing.T, output *corev1.Secret) string {
 	require.NotNil(t, provider.NetworkHostnameConfig())
 
 	return provider.NetworkHostnameConfig().Hostname()
+}
+
+func smokeManagementAdmissionAndServedConversion(t *testing.T, ctx context.Context, apiClient client.Client, namespace string, machine *clusterv1.Machine) {
+	t.Helper()
+	management := func() *bootstrapv1.ManagementSpec {
+		return &bootstrapv1.ManagementSpec{
+			Mode: bootstrapv1.ManagementModeObserve, InventoryRevision: "inventory-1",
+			Machines: []bootstrapv1.MachineIdentityReference{{Name: machine.Name, UID: machine.UID}},
+		}
+	}
+	template := &bootstrapv1.TalosConfigTemplate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "management-template-beta"},
+		Spec: bootstrapv1.TalosConfigTemplateSpec{Template: bootstrapv1.TalosConfigTemplateResource{Spec: bootstrapv1.TalosConfigSpec{
+			GenerateType: "none", ConfigSecretRef: &bootstrapv1.SecretKeyReference{Name: "baseline", Key: "value"}, Management: management(),
+		}}},
+	}
+	alphaTemplate := &bootstrapv1alpha3.TalosConfigTemplate{}
+	require.NoError(t, alphaTemplate.ConvertFrom(template))
+	alphaTemplate.Name = "management-template-alpha"
+	for _, object := range []client.Object{template, alphaTemplate} {
+		err := apiClient.Create(ctx, object)
+		require.True(t, apierrors.IsInvalid(err), "both served APIs must reject template management: %v", err)
+		assert.Contains(t, err.Error(), "management is only supported on concrete TalosConfigs")
+	}
+	template.Name = "ordinary-template-beta"
+	template.Spec.Template.Spec.Management = nil
+	require.NoError(t, apiClient.Create(ctx, template), "ordinary templates remain admissible")
+	alphaTemplate = &bootstrapv1alpha3.TalosConfigTemplate{}
+	require.NoError(t, alphaTemplate.ConvertFrom(template))
+	alphaTemplate.Name = "ordinary-template-alpha"
+	alphaTemplate.UID = ""
+	alphaTemplate.ResourceVersion = ""
+	require.NoError(t, apiClient.Create(ctx, alphaTemplate), "served alpha templates without management remain admissible")
+
+	for _, withStash := range []bool{true, false} {
+		name := "management-api-stash"
+		if !withStash {
+			name = "management-api-without-stash"
+		}
+		// Paused ownerless fixtures exercise admission/conversion only. The
+		// controller's watch predicate excludes them, avoiding status/RV races
+		// and any management reconciliation or node-client activity.
+		concrete := &bootstrapv1.TalosConfig{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: map[string]string{clusterv1.PausedAnnotation: ""}},
+			Spec: bootstrapv1.TalosConfigSpec{
+				GenerateType: "none", ConfigSecretRef: &bootstrapv1.SecretKeyReference{Name: "baseline", Key: "value"}, Management: management(),
+			},
+		}
+		require.NoError(t, apiClient.Create(ctx, concrete), "management belongs on concrete TalosConfigs")
+		key := client.ObjectKeyFromObject(concrete)
+		spoke := &bootstrapv1alpha3.TalosConfig{}
+		require.NoError(t, apiClient.Get(ctx, key, spoke), "served alpha reads use the real TLS conversion webhook")
+		if !withStash {
+			delete(spoke.Annotations, utilconversion.DataAnnotation)
+		}
+		spoke.Spec.Management.Mode = bootstrapv1alpha3.ManagementModeManaged
+		spoke.Spec.Management.InventoryRevision = "inventory-2"
+		spoke.Spec.Management.Approval = &bootstrapv1alpha3.ObservationApproval{Revision: "inventory-2", ObservationID: "observation-2"}
+		require.NoError(t, apiClient.Update(ctx, spoke), "served alpha approval edits must not restore stale hub values")
+		if !withStash {
+			delete(spoke.Annotations, utilconversion.DataAnnotation)
+		}
+		spoke.Status.Management = &bootstrapv1alpha3.ManagementStatus{
+			ActivatedRevision: "inventory-2",
+			Observation: &bootstrapv1alpha3.ObservationStatus{Revision: "inventory-2", ID: "observation-2", ObservedAt: metav1.NewTime(time.Unix(100, 0).UTC())},
+		}
+		spoke.Status.LastHandledReconcileAt = "request-2"
+		require.NoError(t, apiClient.Status().Update(ctx, spoke), "served alpha status edits must survive storage conversion")
+		stored := &bootstrapv1.TalosConfig{}
+		require.NoError(t, apiClient.Get(ctx, key, stored))
+		require.NotNil(t, stored.Spec.Management)
+		require.NotNil(t, stored.Spec.Management.Approval)
+		assert.Equal(t, "inventory-2", stored.Spec.Management.InventoryRevision)
+		assert.Equal(t, "observation-2", stored.Spec.Management.Approval.ObservationID)
+		require.NotNil(t, stored.Status.Management)
+		require.NotNil(t, stored.Status.Management.Observation)
+		assert.Equal(t, "inventory-2", stored.Status.Management.ActivatedRevision)
+		assert.Equal(t, "observation-2", stored.Status.Management.Observation.ID)
+		assert.Equal(t, "request-2", stored.Status.LastHandledReconcileAt)
+	}
 }
