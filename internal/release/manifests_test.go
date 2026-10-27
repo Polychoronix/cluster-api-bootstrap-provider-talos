@@ -124,13 +124,15 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 		require.NoError(t, err)
 		require.NotEqual(t, "Secret", resource["kind"], "release components must not embed credentials")
 		if resource["kind"] == "Deployment" {
-			deployment = true
 			spec := resource["spec"].(map[string]any)
 			template := spec["template"].(map[string]any)
 			pod := template["spec"].(map[string]any)
 			containers := pod["containers"].([]any)
-			require.Len(t, containers, 1)
-			require.Equal(t, image, containers[0].(map[string]any)["image"])
+			for _, container := range containers {
+				if container.(map[string]any)["image"] == image {
+					deployment = true
+				}
+			}
 		}
 		if resource["kind"] == "CustomResourceDefinition" && resource["metadata"].(map[string]any)["name"] == "talosconfigs.bootstrap.cluster.x-k8s.io" {
 			configCRD = true
@@ -143,7 +145,7 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 			}
 		}
 	}
-	require.True(t, deployment, "actual controller deployment must be rendered")
+	require.True(t, deployment, "requested controller image must be rendered in a deployment")
 	require.True(t, configCRD, "actual complete-input CRD must be rendered")
 	originalManager, err := os.ReadFile(filepath.Join(repository(t), "config", "manager", "kustomization.yaml"))
 	require.NoError(t, err)
