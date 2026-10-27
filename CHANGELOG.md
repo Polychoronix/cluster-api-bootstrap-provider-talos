@@ -63,6 +63,12 @@
 - Require explicit effective TCP inputs before observation/approval and validate
   untyped shared/override policies with common reference and inventory rules;
   missing policy, duplicates and overlay conflicts never select live-TC fallback.
+- Add one credential-free native/Docker release renderer with SHA256/SHA512 assets,
+  personal-account OCI provenance and actual buildx-digest release deployments.
+- Replace duplicate tag publication with one maintained publisher and public
+  nonpublishing source validation; pin native Kres and publish only generated CI
+  from disposable staging without changing inherited GPG/DCO trust policy.
+
 
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 

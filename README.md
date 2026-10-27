@@ -21,6 +21,68 @@ There are a few corequisites and assumptions that go into using this project:
 - [Cluster API](https://github.com/kubernetes-sigs/cluster-api)
 - [Talos](https://talos.dev/)
 
+
+## Personal fork release tooling
+
+This fork's source is
+[`Polychoronix/cluster-api-bootstrap-provider-talos`](https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos).
+Local image defaults use the personal account's lowercase registry namespace,
+`ghcr.io/polychoronix/cluster-api-talos-controller`. `SOURCE_URL`, the full Git
+`REVISION` and `TAG` supply OCI source/revision/version labels; the license remains
+MPL-2.0. A source checkout or locally rendered tag is not a published release.
+
+`make rekres` uses native Go (at least 1.26.2) and the exact Kres source revision
+[`15ff2fda3c9184427ef4f8ba0e2b94389b0f8dc7`](https://github.com/siderolabs/kres/tree/15ff2fda3c9184427ef4f8ba0e2b94389b0f8dc7).
+It runs `gen` in a disposable repository with `.kres.yaml`'s
+`compileGHWorkflowsOnly: true`, explicitly unsets `GITHUB_TOKEN`, and publishes
+only the generated `ci.yaml`. It does not overwrite Makefile, Dockerfile, Conform,
+Renovate or auxiliary workflows, and does not configure GitHub remotely. Its
+generated CI has no tag trigger or publisher. The inherited `generic` runner
+group is inaccessible to this personal fork and must not be treated as usable CI.
+
+The maintained `source.yaml` is nonpublishing validation on public Ubuntu runners:
+it checks pinned API/CRD generation freshness, source tests, an actual Kustomize
+release render and the controller build. It does not run `make test` or the
+ambient-cluster integration suite. The historical `.conform.yaml` is deliberately
+preserved, not adopted as a personal-account signing policy: Conform's
+[`gitHubOrganization` resolver](https://github.com/siderolabs/conform/blob/b951e4415e9cde1cc0cda7ad3eb467e195d8eb77/internal/policy/commit/check_gpg_identity.go#L54-L79)
+lists organization members, not a personal user's keys. Neither GPG-required nor
+DCO enforcement is weakened here; enabling fork conformance requires a separately
+reviewed trust-policy decision. Public source CI does not invoke that policy.
+
+The sole tag publisher is the maintained `release.yaml`. It uses the actual Git
+tag and full source commit, lowercases `github.repository_owner` for GHCR,
+classifies hyphenated versions as prereleases, and renders deployment images from
+the actual pushed buildx digest, never a guessed digest or community image. The
+workflow requires real publication credentials; local `make container` defaults
+to `PUSH=false`.
+
+For an explicitly supplied local-render tag and installed Kustomize, run:
+
+```sh
+: "${TAG:?Set the reviewed release or local-render tag}"
+make release-manifests TAG="$TAG" \
+  CONTROLLER_IMAGE="ghcr.io/polychoronix/cluster-api-talos-controller:$TAG" \
+  KUSTOMIZE=kustomize
+RELEASE_TEST_KUSTOMIZE=kustomize go test -count=1 ./internal/release
+```
+
+The single renderer, `hack/release-manifests.sh`, is shared by native Make and the
+Docker release stage. It copies only public `config/` inputs and outputs
+`_out/bootstrap-talos/$TAG/{bootstrap-components.yaml,metadata.yaml,SHA256SUMS,SHA512SUMS}`.
+Both checksum files cover the rendered components and metadata. The pinned Linux
+amd64 Kustomize 4.1.0 binary's
+[published SHA256](https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v4.1.0/checksums.txt)
+is `77263c66afd04106348bebd019096933e26c0054d5b0ade8265f3426cf440ae6`;
+its historical module cannot be installed with `go install package@version`
+because it contains exclude directives. Native tooling and the Docker release
+stage verify the published binary instead.
+
+Use an actual published digest when rendering deployable release components.
+Local rendering does not prove image publication, public visibility, anonymous
+pulls or live deployment. The paired CACPPT dependency and release version must
+match the approved CABPT fork release exactly before integrating either provider.
+
 ## Installing
 
 CABPT provider should be installed alongside with [CACPPT](https://github.com/sidero-community/cluster-api-control-plane-provider-talos) provider.
@@ -366,10 +428,13 @@ It is on by default, so **upgrading to a build that has it applies the pool's cu
 
 ## Building
 
-This project can be built simply by running `make release` from the root directory.
-Doing so will create a file called `_out/bootstrap-talos/<version>/bootstrap-components.yaml`.
-If you wish, you can tweak settings by editing the release yaml.
-This file can then be installed into your management cluster with `kubectl apply -f _out/bootstrap-components.yaml`.
+With Docker available, `make release TAG="$TAG"` builds local release artifacts
+for the explicitly supplied tag; publication remains disabled unless approved
+and requested with `PUSH=true`. The components are at
+`_out/bootstrap-talos/$TAG/bootstrap-components.yaml`, beside metadata and both
+checksum files. Native rendering and public release tooling are described above.
+After separately approving deployment, that exact file can be installed with
+`kubectl apply -f "_out/bootstrap-talos/$TAG/bootstrap-components.yaml"`.
 
 ## Support
 
