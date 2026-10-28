@@ -57,6 +57,10 @@ the actual pushed buildx digest, never a guessed digest or community image. The
 workflow requires real publication credentials; local `make container` defaults
 to `PUSH=false`.
 
+The tag publisher installs checksum-verified Kustomize 4.1.0, matching source
+validation and the Docker release stage, and passes its isolated runner-temporary
+binary path to `make release-manifests` rather than using ambient Kustomize.
+
 For an explicitly supplied local-render tag and installed Kustomize, run:
 
 ```sh

@@ -63,8 +63,15 @@ jobs:
         run: |
           digest=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' _out/image-metadata.json)
           printf 'image=%s@%s\n' "${TAGGED_IMAGE%:*}" "$digest" >> "$GITHUB_OUTPUT"
+      - name: install-release-kustomize
+        run: |
+          install_dir="$RUNNER_TEMP/cabpt-release-kustomize"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$install_dir/kustomize_v4.1.0_linux_amd64.tar.gz" https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v4.1.0/kustomize_v4.1.0_linux_amd64.tar.gz
+          printf '%s  %s\n' 77263c66afd04106348bebd019096933e26c0054d5b0ade8265f3426cf440ae6 "$install_dir/kustomize_v4.1.0_linux_amd64.tar.gz" | sha256sum --check
+          tar -xzf "$install_dir/kustomize_v4.1.0_linux_amd64.tar.gz" -C "$install_dir" kustomize
       - name: release-manifests
-        run: make release-manifests TAG="$GITHUB_REF_NAME" CONTROLLER_IMAGE="${{ steps.published.outputs.image }}"
+        run: make release-manifests TAG="$GITHUB_REF_NAME" CONTROLLER_IMAGE="${{ steps.published.outputs.image }}" KUSTOMIZE="$RUNNER_TEMP/cabpt-release-kustomize/kustomize"
       - name: release
         uses: softprops/action-gh-release@v3
         with:

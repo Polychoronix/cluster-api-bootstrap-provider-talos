@@ -1,5 +1,9 @@
 ## Unreleased CRACI integration changes
 
+- Correct the source workflow's immutable setup-go v6 revision and explicitly
+  install checksum-verified Kustomize 4.1.0 for native tag publication, passing
+  its isolated binary path to the shared release renderer.
+
 - Add namespace-local complete configuration Secret baselines, ordered private
   strategic patches, per-Machine overlays and explicit desired revisions in both
   served APIs, conversions, deepcopies and CRDs.
