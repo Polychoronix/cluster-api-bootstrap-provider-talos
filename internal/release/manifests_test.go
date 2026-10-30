@@ -115,6 +115,7 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 
 	decoder := yaml.NewDecoder(bytes.NewReader(components))
 	deployment, configCRD := false, false
+	mutatingWebhook, validatingWebhook := false, false
 	for {
 		var resource map[string]any
 		err := decoder.Decode(&resource)
@@ -123,6 +124,14 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 		}
 		require.NoError(t, err)
 		require.NotEqual(t, "Secret", resource["kind"], "release components must not embed credentials")
+		if resource["kind"] == "MutatingWebhookConfiguration" || resource["kind"] == "ValidatingWebhookConfiguration" {
+			metadata := resource["metadata"].(map[string]any)
+			annotations, ok := metadata["annotations"].(map[string]any)
+			require.True(t, ok, "every admission webhook must opt into serving-certificate CA injection")
+			require.Equal(t, "cabpt-system/cabpt-serving-cert", annotations["cert-manager.io/inject-ca-from"])
+			mutatingWebhook = mutatingWebhook || resource["kind"] == "MutatingWebhookConfiguration"
+			validatingWebhook = validatingWebhook || resource["kind"] == "ValidatingWebhookConfiguration"
+		}
 		if resource["kind"] == "Deployment" {
 			spec := resource["spec"].(map[string]any)
 			template := spec["template"].(map[string]any)
@@ -147,6 +156,8 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 	}
 	require.True(t, deployment, "requested controller image must be rendered in a deployment")
 	require.True(t, configCRD, "actual complete-input CRD must be rendered")
+	require.True(t, mutatingWebhook, "actual mutating webhook and CA injection must be rendered")
+	require.True(t, validatingWebhook, "actual validating webhook and CA injection must be rendered")
 	originalManager, err := os.ReadFile(filepath.Join(repository(t), "config", "manager", "kustomization.yaml"))
 	require.NoError(t, err)
 	copiedManager, err := os.ReadFile(filepath.Join(root, "config", "manager", "kustomization.yaml"))
