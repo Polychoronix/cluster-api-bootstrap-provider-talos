@@ -1,5 +1,8 @@
 ## Unreleased CRACI integration changes
 
+- Inject the serving-certificate CA into the mutating admission webhook as well
+  as the validating webhook, and cover both in the actual release-renderer test.
+
 - Correct the source workflow's immutable setup-go v6 revision and explicitly
   install checksum-verified Kustomize 4.1.0 for native tag publication, passing
   its isolated binary path to the shared release renderer.
