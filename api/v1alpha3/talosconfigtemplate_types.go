@@ -9,6 +9,7 @@ import (
 )
 
 // TalosConfigTemplateSpec defines the desired state of TalosConfigTemplate
+// +kubebuilder:validation:XValidation:rule="!has(self.template.spec.management)",message="management is only supported on concrete TalosConfigs"
 type TalosConfigTemplateSpec struct {
 	Template TalosConfigTemplateResource `json:"template"`
 }

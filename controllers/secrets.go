@@ -5,6 +5,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -24,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 )
 
 func (r *TalosConfigReconciler) fetchSecret(ctx context.Context, config *bootstrapv1beta1.TalosConfig, secretName string) (*corev1.Secret, error) {
@@ -58,7 +61,7 @@ retry:
 		// no cluster secret yet, generate new one
 		secretsBundle, err = secrets.NewBundle(secrets.NewFixedClock(time.Now()), versionContract)
 		if err != nil {
-			return nil, fmt.Errorf("error generating new secrets bundle: %w", err)
+			return nil, identityError("bundle generation")
 		}
 
 		if err = r.writeSecretsBundleSecret(ctx, scope, secretName, secretsBundle); err != nil {
@@ -67,38 +70,12 @@ retry:
 				goto retry
 			}
 
-			return nil, fmt.Errorf("error writing secrets bundle: %w", err)
+			return nil, identityError("bundle write")
 		}
 	case err != nil:
 		return nil, fmt.Errorf("error reading secrets bundle: %w", err)
 	default:
-		// successfully loaded secret, initialize secretsBundle from it
-		secretsBundle = &secrets.Bundle{
-			Clock: secrets.NewFixedClock(time.Now()),
-		}
-
-		if _, ok := secret.Data["bundle"]; ok {
-			// new format
-			if err = yaml.Unmarshal(secret.Data["bundle"], secretsBundle); err != nil {
-				return nil, fmt.Errorf("error unmarshaling secrets bundle: %w", err)
-			}
-		} else {
-			// legacy format
-			if err = yaml.Unmarshal(secret.Data["certs"], &secretsBundle.Certs); err != nil {
-				return nil, fmt.Errorf("error unmarshaling certs: %w", err)
-			}
-
-			if err = yaml.Unmarshal(secret.Data["kubeSecrets"], &secretsBundle.Secrets); err != nil {
-				return nil, fmt.Errorf("error unmarshaling secrets: %w", err)
-			}
-
-			if err = yaml.Unmarshal(secret.Data["trustdInfo"], &secretsBundle.TrustdInfo); err != nil {
-				return nil, fmt.Errorf("error unmarshaling trustd info: %w", err)
-			}
-
-			// not stored in legacy format, use empty values
-			secretsBundle.Cluster = &secrets.Cluster{}
-		}
+		return configinput.DecodeGenerationSecret(secret, versionContract)
 	}
 
 	return secretsBundle, nil
@@ -131,8 +108,11 @@ func (r *TalosConfigReconciler) writeSecretsBundleSecret(ctx context.Context, sc
 
 func (r *TalosConfigReconciler) writeK8sCASecret(ctx context.Context, scope *TalosConfigScope, certs *x509.PEMEncodedCertificateAndKey) error {
 	// Create ca secret only if it doesn't already exist
-	_, err := r.fetchSecret(ctx, scope.Config, scope.Cluster.Name+"-ca")
+	existing, err := r.fetchSecret(ctx, scope.Config, scope.Cluster.Name+"-ca")
 	if err == nil {
+		if !bytes.Equal(existing.Data["tls.crt"], certs.Crt) || !bytes.Equal(existing.Data["tls.key"], certs.Key) {
+			return identityError("Kubernetes CA mismatch")
+		}
 		return nil
 	}
 
@@ -158,8 +138,16 @@ func (r *TalosConfigReconciler) writeK8sCASecret(ctx context.Context, scope *Tal
 	}
 
 	err = r.Client.Create(ctx, certSecret)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return err
+	if k8serrors.IsAlreadyExists(err) {
+		existing, err = r.fetchSecret(ctx, scope.Config, scope.Cluster.Name+"-ca")
+		if err != nil {
+			return identityError("Kubernetes CA winning-create lookup")
+		}
+		if !bytes.Equal(existing.Data["tls.crt"], certs.Crt) || !bytes.Equal(existing.Data["tls.key"], certs.Key) {
+			return identityError("Kubernetes CA winning-create mismatch")
+		}
+	} else if err != nil {
+		return identityError("Kubernetes CA create")
 	}
 
 	return nil
@@ -192,21 +180,51 @@ func (r *TalosConfigReconciler) rewritesBootstrapData(scope *TalosConfigScope) b
 // configHash is recorded on the secret so the in-place update extension, and the MachinePool
 // update loop, can distinguish a regenerated secret from one that still holds the pre-update
 // configuration.
-func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *TalosConfigScope, data []byte, configHash string) (string, error) {
+func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *TalosConfigScope, data []byte, configHash string, privateFreshness []byte) (string, error) {
+	if len(privateFreshness) == 0 {
+		return "", fmt.Errorf("configuration input generated Secret: freshness required")
+	}
 	ownerName := scope.ConfigOwner.GetName()
 	dataSecretName := ownerName + "-bootstrap-data"
+	if original := scope.ConfigOwner.DataSecretName(); original != nil && *original == dataSecretName {
+		seed, err := r.fetchSecret(ctx, scope.Config, *original)
+		if err != nil {
+			return "", fmt.Errorf("configuration input bootstrap provenance: lookup failed")
+		}
+		providerOwned := false
+		for _, ref := range seed.OwnerReferences {
+			if ref.Kind == "TalosConfig" && ref.UID == scope.Config.UID {
+				providerOwned = true
+			}
+		}
+		if !providerOwned {
+			dataSecretName = scope.Config.Name + "-update-data"
+		}
+	}
+	if scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" {
+		dataSecretName = scope.Config.Name + "-update-data"
+	}
 
 	r.Log.Info("handling bootstrap data for ", "owner", ownerName)
 
 	existing, err := r.fetchSecret(ctx, scope.Config, dataSecretName)
 	if err == nil {
+		if !scope.ConfigOwner.IsMachinePool() {
+			owned := false
+			for _, ref := range existing.OwnerReferences {
+				if ref.Kind == "TalosConfig" && ref.UID == scope.Config.UID {
+					owned = true
+				}
+			}
+			if !owned {
+				return "", fmt.Errorf("configuration input generated Secret: ownership mismatch")
+			}
+		}
 		if !r.rewritesBootstrapData(scope) {
 			return dataSecretName, nil
 		}
 
-		if existing.Annotations != nil && existing.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] == configHash {
-			// Already regenerated for this desired spec; rewriting would only churn the
-			// resourceVersion on every reconcile while the update is in progress.
+		if bytes.Equal(existing.Data[configinput.FreshnessKey], privateFreshness) {
 			return dataSecretName, nil
 		}
 
@@ -217,9 +235,15 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			patched.Annotations = map[string]string{}
 		}
 
-		patched.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
-		patched.Data = map[string][]byte{
-			"value": data,
+		if scope.ConfigOwner.IsMachinePool() {
+			patched.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
+		} else {
+			delete(patched.Annotations, bootstrapv1beta1.InPlaceConfigHashAnnotation)
+		}
+		patched.Data = map[string][]byte{"value": data}
+		patched.Data[configinput.FreshnessKey] = privateFreshness
+		if accepted := existing.Data[updateoperation.AcceptedIntentKey]; len(accepted) > 0 {
+			patched.Data[updateoperation.AcceptedIntentKey] = accepted
 		}
 
 		return dataSecretName, r.Client.Patch(ctx, patched, client.MergeFrom(existing))
@@ -236,9 +260,7 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			Labels: map[string]string{
 				capiv1.ClusterNameLabel: scope.Cluster.Name,
 			},
-			Annotations: map[string]string{
-				bootstrapv1beta1.InPlaceConfigHashAnnotation: configHash,
-			},
+			Annotations: map[string]string{},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(scope.Config, bootstrapv1beta1.GroupVersion.WithKind("TalosConfig")),
 			},
@@ -246,6 +268,48 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 		Data: map[string][]byte{
 			"value": data,
 		},
+	}
+	initial := false
+	if !bootstrapv1beta1.IsInPlaceUpdate(scope.Config) && scope.ConfigOwner.DataSecretName() == nil && !scope.ConfigOwner.IsMachinePool() {
+		var err error
+		initial, err = r.initialBootstrapLineage(ctx, scope)
+		if err != nil {
+			return "", err
+		}
+	}
+	if initial {
+		image, err := updateoperation.ConfigurationImage(data, scope.Config.Spec)
+		if err != nil {
+			return "", err
+		}
+		intent, err := updateoperation.EncodeAcceptedIntent(updateoperation.AcceptedIntent{MachineUID: scope.ConfigOwner.GetUID(), TalosConfigUID: scope.Config.UID, Image: image})
+		if err != nil {
+			return "", err
+		}
+		certSecret.Data[updateoperation.AcceptedIntentKey] = intent
+	}
+	if !initial && scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" && !scope.ConfigOwner.IsMachinePool() {
+		machine := &capiv1.Machine{}
+		if r.APIReader == nil || r.APIReader.Get(ctx, client.ObjectKey{Namespace: scope.Config.Namespace, Name: ownerName}, machine) != nil {
+			return "", fmt.Errorf("Talos management live Machine lookup failed")
+		}
+		authority, _, err := updateoperation.ManagementAuthorityForMachine(ctx, r.APIReader, machine, scope.Config)
+		if err != nil {
+			return "", err
+		}
+		accepted, err := updateoperation.ManagementAcceptedIntent(ctx, r.APIReader, authority, machine, scope.Config)
+		if err != nil {
+			return "", err
+		}
+		intent, err := updateoperation.EncodeAcceptedIntent(accepted)
+		if err != nil {
+			return "", err
+		}
+		certSecret.Data[updateoperation.AcceptedIntentKey] = intent
+	}
+	certSecret.Data[configinput.FreshnessKey] = privateFreshness
+	if scope.ConfigOwner.IsMachinePool() {
+		certSecret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] = configHash
 	}
 
 	err = r.Client.Create(ctx, certSecret)
@@ -258,6 +322,28 @@ func (r *TalosConfigReconciler) reconcileClientConfig(ctx context.Context, log l
 	if !(scope.Config.Spec.GenerateType == talosmachine.TypeControlPlane.String() || scope.Config.Spec.GenerateType == talosmachine.TypeInit.String()) {
 		// can only reconcile for control plane machines
 		return nil
+	}
+	identity, identityErr := r.fetchSecret(ctx, scope.Config, scope.Cluster.Name+"-talosconfig")
+	if identityErr == nil {
+		ca, err := identityCA(identity)
+		if err != nil {
+			return err
+		}
+		if !providerCreatedIdentity(identity, scope) {
+			return nil
+		}
+		if scope.Config.Spec.ConfigSecretRef != nil || scope.Config.Spec.GenerateType == "none" || scope.Config.Spec.MachineConfig != nil && scope.Config.Spec.MachineConfig.ConfigSecretRef != nil {
+			return nil
+		}
+		bundle, err := r.getSecretsBundle(ctx, scope, false, defaultVersionContract)
+		if err != nil {
+			return identityError("generated bundle lookup")
+		}
+		if bundle.Certs == nil || bundle.Certs.OS == nil || !bytes.Equal(ca, bundle.Certs.OS.Crt) {
+			return identityError("generated bundle mismatch")
+		}
+	} else if !k8serrors.IsNotFound(identityErr) {
+		return identityError("lookup")
 	}
 
 	machines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, scope.Cluster, collections.ControlPlaneMachines(scope.Cluster.Name))
@@ -292,21 +378,15 @@ func (r *TalosConfigReconciler) reconcileClientConfig(ctx context.Context, log l
 
 	log.Info("updating talosconfig", "endpoints", endpoints, "secret", dataSecretName)
 
-	configSecret := &corev1.Secret{}
-
-	err = r.Client.Get(ctx, client.ObjectKey{Namespace: scope.Cluster.Namespace, Name: dataSecretName}, configSecret)
-	if err != nil {
-		if !k8serrors.IsNotFound(err) {
-			return fmt.Errorf("error fetching secret: %w", err)
-		}
-
-		configSecret = &corev1.Secret{
+	if k8serrors.IsNotFound(identityErr) {
+		configSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: scope.Cluster.Namespace,
 				Name:      dataSecretName,
 				Labels: map[string]string{
 					capiv1.ClusterNameLabel: scope.Cluster.Name,
 				},
+				Annotations: map[string]string{identityCreatedAnnotation: identityCreatedValue},
 				OwnerReferences: []metav1.OwnerReference{
 					*metav1.NewControllerRef(scope.Cluster, capiv1.GroupVersion.WithKind("Cluster")),
 				},
@@ -316,16 +396,10 @@ func (r *TalosConfigReconciler) reconcileClientConfig(ctx context.Context, log l
 			},
 		}
 
-		return r.Client.Create(ctx, configSecret)
+		if err := r.Client.Create(ctx, configSecret); err != nil {
+			return identityError("create conflict; revalidation required")
+		}
+		return nil
 	}
-
-	configSecret.Data["talosconfig"] = []byte(talosConfig)
-
-	err = r.Client.Update(ctx, configSecret)
-	if k8serrors.IsConflict(err) {
-		// ignore conflict errors, probably another reconcile fixed up the endpoints
-		err = nil
-	}
-
-	return err
+	return patchIdentitySnapshot(ctx, r.Client, identity, []byte(talosConfig))
 }

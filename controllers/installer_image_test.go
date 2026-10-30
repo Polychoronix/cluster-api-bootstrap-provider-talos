@@ -7,6 +7,7 @@ package controllers
 import (
 	"testing"
 
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/siderolabs/talos/pkg/machinery/config/configpatcher"
@@ -22,7 +23,7 @@ const minimalWorker = "version: v1alpha1\nmachine:\n  type: worker\n  token: a.b
 func applyInstallImagePatch(t *testing.T, contract *config.VersionContract) config.Provider {
 	t.Helper()
 
-	patch, err := configpatcher.LoadPatch([]byte(installImagePatch(contract, testInstaller)))
+	patch, err := configpatcher.LoadPatch([]byte(configinput.InstallerPatch(contract, testInstaller)))
 	require.NoError(t, err)
 
 	out, err := configpatcher.Apply(configpatcher.WithBytes([]byte(minimalWorker)), []configpatcher.Patch{patch})

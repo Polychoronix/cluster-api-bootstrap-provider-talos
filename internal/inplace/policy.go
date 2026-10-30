@@ -26,6 +26,11 @@ var talosConfigPaths = []fieldPath{
 	"spec.hostname",
 	"spec.talosVersion",
 	"spec.imageFactory",
+	"spec.configSecretRef",
+	"spec.strategicPatchSecretRefs",
+	"spec.configRevision",
+	"spec.machineConfig",
+	"spec.talosEndpoint",
 }
 
 // machinePaths are the core Machine spec fields an in-place update can deliver.

@@ -122,6 +122,10 @@ func TestReconcileUserConfigWritesTheKubernetesCA(t *testing.T) {
 
 			f := newImageFactoryFixture(t, bootstrapv1beta1.TalosConfigSpec{GenerateType: "none", Data: data}, nil)
 
+			machine := &capiv1.Machine{}
+			require.NoError(t, f.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "machine-1"}, machine))
+			machine.Spec.Version = "v1.37.0"
+			require.NoError(t, f.client.Update(context.Background(), machine))
 			require.NoError(t, f.reconcile(t))
 
 			ca := f.secret(t, testClusterName+"-ca")

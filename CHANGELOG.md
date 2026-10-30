@@ -1,3 +1,82 @@
+## Unreleased CRACI integration changes
+
+- Inject the serving-certificate CA into the mutating admission webhook as well
+  as the validating webhook, and cover both in the actual release-renderer test.
+
+- Correct the source workflow's immutable setup-go v6 revision and explicitly
+  install checksum-verified Kustomize 4.1.0 for native tag publication, passing
+  its isolated binary path to the shared release renderer.
+
+- Add namespace-local complete configuration Secret baselines, ordered private
+  strategic patches, per-Machine overlays and explicit desired revisions in both
+  served APIs, conversions, deepcopies and CRDs.
+- Share complete-document rendering and private resolved-input freshness between
+  bootstrap and requested runtime updates; preserve original adoption seeds.
+- Preserve imported Talos mTLS identity and exact baseline CA, with creation-only
+  provider provenance rather than heuristic ownership takeover.
+- Add explicit dial address/TLS server name/single-node routing clients and real
+  in-memory mTLS RPC, API/schema, rotation and disposable controller smoke tests.
+- Guarded live adoption and matched published release assets remain separate
+  integration milestones; no automatic physical cleanup added.
+- Add UID/RV-guarded versioned operation journals, explicit unknown outcomes,
+  per-step asynchronous single issuance and observed completion receipts.
+- Preserve accepted image intent across render rewrites, prevent registry-only OS
+  drift enforcement, and support sequential same-Machine receipt consumption.
+- Gate reboot/install completion on actual config/boot/OS/kubelet/Node recovery;
+  gate control-plane receipts on complete healthy voting etcd views and API health.
+- Add actual isolated core/runtime URL/mTLS/COSI/Lifecycle chain and Registrar CA
+  tests; legacy OS compatibility and reviewed live adoption remain explicit gates.
+- Register typed CRDs in the production manager scheme and grant read-only lineage
+  lookup permissions; verify initial complete-config rendering using a token-only
+  service account with denied-before/granted-after RBAC, not admin-only fixtures.
+- Hold recognized fresh CP bootstrap before seed publication while core transfers
+  InfraMachine ownership after bootstrap reconciliation; never retroactively
+  create accepted intent on an already published seed.
+
+- Add shared declarative Observe/Managed inventory and exact manifest approval,
+  immutable private safety snapshots and opaque stable observation IDs; reuse
+  complete-config/Talos transport for standalone and aggregate TCP observation.
+- Preserve original seeds and imported identity; fence paused/Observe authorities
+  before bootstrap/client/runtime/receipt writes. Keep actual etcd membership
+  independent of configured inventory and reject unaccounted/learner membership.
+- Add generic management API/conversion/schema, immutable disposable-API and real
+  mTLS/COSI observation tests; native owner choreography remains separate from
+  bootstrap observation and old-installation upgrades are not adoption.
+- Preserve positive native CP successor bootstrap lineage after aggregate activation;
+  imported inventory never becomes permission to recreate a seed or counterfeit
+  native accepted intent, and successors need no duplicated child adoption approval.
+- Require APIReader and actual fresh accepted seed provenance even when public
+  management fields are removed; retained private records remain a hard fence.
+- Freeze aggregate initial Machine owner transitions privately before transfer;
+  activate only after all exact owners and unchanged original safety are observed,
+  preserving the approved observation ID across partial transfer and restart.
+- Retry unresolved observations through existing bounded reconciliation and patch
+  child management status explicitly without inventing readiness or bypassing pause.
+- Bind immutable observations to normalized live authority policy, including TCP
+  desired templates, versions and per-Machine overrides; approval-only changes do
+  not alter opaque observation identity and association permits only attested refs.
+- Require actual preserved workload Node UID for managed adopted members while
+  allowing reviewed next desired inputs and harmless identity/seed metadata churn
+  after full initial ownership; original seed UID and bytes remain immutable.
+- Observe canonical effective shared/per-node policy separately from actual live
+  TalosConfig spec/identity through the existing renderer; semantically equivalent
+  representations pass while unapplied shared/private overlay policy fails closed.
+- Keep adopted identity authorization independent of transient readiness; health
+  gates new disruptive issuance and completion while expected same-UID NotReady
+  recovery stays pending without duplicate operations or ambiguous consent.
+- Add separate deleting-authority retirement validation for exact activated or
+  proved fresh native lineage; pending owner/update/receipt work, Observe, foreign
+  identities and pause still hold, while clean consumed lifecycle may delete.
+- Require explicit effective TCP inputs before observation/approval and validate
+  untyped shared/override policies with common reference and inventory rules;
+  missing policy, duplicates and overlay conflicts never select live-TC fallback.
+- Add one credential-free native/Docker release renderer with SHA256/SHA512 assets,
+  personal-account OCI provenance and actual buildx-digest release deployments.
+- Replace duplicate tag publication with one maintained publisher and public
+  nonpublishing source validation; pin native Kres and publish only generated CI
+  from disposable staging without changing inherited GPG/DCO trust policy.
+
+
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 
 Welcome to the v0.7.0-alpha.2 release of CAPI Bootstrap Provider Talos!  

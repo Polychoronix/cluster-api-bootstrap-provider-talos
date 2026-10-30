@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/inplace"
+	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 )
 
 // poolConvergenceRequeue is how long to wait before revisiting pool members that could not be
@@ -167,10 +169,22 @@ func (r *TalosConfigReconciler) poolBootstrapData(ctx context.Context, log logr.
 	dataSecretName := scope.ConfigOwner.GetName() + "-bootstrap-data"
 
 	secret, err := r.fetchSecret(ctx, scope.Config, dataSecretName)
-	switch {
-	case err == nil && secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] == desiredHash:
-		return secret, nil
-	case err != nil && !k8serrors.IsNotFound(err):
+	if err == nil && secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation] == desiredHash {
+		if len(secret.Data[configinput.FreshnessKey]) == 0 {
+			return secret, nil
+		}
+		renderContext, err := configRenderContext(scope, installerImageFromStatus(scope.Config))
+		if err != nil {
+			return nil, err
+		}
+		fresh, err := configinput.IsFresh(ctx, r.Client, scope.Config, renderContext, secret)
+		if err != nil {
+			return nil, err
+		}
+		if fresh {
+			return secret, nil
+		}
+	} else if err != nil && !k8serrors.IsNotFound(err) {
 		return nil, err
 	}
 
@@ -255,7 +269,8 @@ func (r *TalosConfigReconciler) applyToPoolMachines(
 
 		log.Info("applying machine configuration to machine pool member", "machine", machine.Name)
 
-		if err := r.applyToPoolMachine(ctx, clusterKey, machine, endpoints, data, appliedHash); err != nil {
+		endpoint := bootstrapv1beta1.TalosEndpoint{Address: net.JoinHostPort(endpoints[0], "50000"), ServerName: endpoints[0]}
+		if err := r.applyToPoolMachine(ctx, clusterKey, machine, endpoint, data, appliedHash); err != nil {
 			return converged, fmt.Errorf("failed updating machine pool member %s: %w", machine.Name, err)
 		}
 
@@ -274,7 +289,7 @@ func (r *TalosConfigReconciler) applyToPoolMachine(
 	ctx context.Context,
 	clusterKey types.NamespacedName,
 	machine *capiv1.Machine,
-	endpoints []string,
+	endpoints bootstrapv1beta1.TalosEndpoint,
 	data []byte,
 	appliedHash string,
 ) error {

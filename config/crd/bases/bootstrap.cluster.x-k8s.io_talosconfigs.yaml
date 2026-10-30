@@ -55,6 +55,32 @@ spec:
                   - path
                   type: object
                 type: array
+                x-kubernetes-list-type: atomic
+              configRevision:
+                description: ConfigRevision requests reconciliation after a same-name
+                  input Secret changes.
+                type: string
+              configSecretRef:
+                description: ConfigSecretRef supplies a complete namespace-local baseline
+                  instead of Data.
+                properties:
+                  key:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[-._a-zA-Z0-9]+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must not be '.' or start with '..'
+                      rule: self != '.' && !self.startsWith('..')
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                required:
+                - key
+                - name
+                type: object
               data:
                 type: string
               generateType:
@@ -71,17 +97,214 @@ spec:
                       "InfrastructureName" (use linked Machine's infrastructure's name).
                     type: string
                 type: object
+              machineConfig:
+                description: MachineConfig retains per-node configuration without
+                  replacing shared patches.
+                properties:
+                  configPatches:
+                    items:
+                      properties:
+                        op:
+                          type: string
+                        path:
+                          type: string
+                        value:
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - op
+                      - path
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  configRevision:
+                    type: string
+                  configSecretRef:
+                    description: SecretKeyReference selects required data in a Secret
+                      in the TalosConfig's namespace.
+                    properties:
+                      key:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[-._a-zA-Z0-9]+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: must not be '.' or start with '..'
+                          rule: self != '.' && !self.startsWith('..')
+                      name:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  strategicPatchSecretRefs:
+                    items:
+                      description: SecretKeyReference selects required data in a Secret
+                        in the TalosConfig's namespace.
+                      properties:
+                        key:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[-._a-zA-Z0-9]+$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: must not be '.' or start with '..'
+                            rule: self != '.' && !self.startsWith('..')
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  strategicPatches:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+              management:
+                description: Management opts an existing node into observation and
+                  approved management.
+                properties:
+                  approval:
+                    description: Approval explicitly authorizes the observed revision.
+                    properties:
+                      observationID:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                      revision:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                    required:
+                    - observationID
+                    - revision
+                    type: object
+                  inventoryRevision:
+                    description: InventoryRevision identifies this non-secret inventory.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                    type: string
+                  machines:
+                    description: Machines pins names to immutable Kubernetes identities.
+                    items:
+                      description: MachineIdentityReference identifies a namespace-local
+                        Machine, not just its name.
+                      properties:
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 1000
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mode:
+                    default: Observe
+                    description: Mode defaults to Observe only when management is
+                      present.
+                    enum:
+                    - Observe
+                    - Managed
+                    type: string
+                required:
+                - inventoryRevision
+                - machines
+                type: object
+                x-kubernetes-validations:
+                - message: Managed requires approval matching inventoryRevision
+                  rule: self.mode != 'Managed' || (has(self.approval) && self.approval.revision
+                    == self.inventoryRevision)
+              strategicPatchSecretRefs:
+                description: StrategicPatchSecretRefs are ordered namespace-local
+                  private patches.
+                items:
+                  description: SecretKeyReference selects required data in a Secret
+                    in the TalosConfig's namespace.
+                  properties:
+                    key:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[-._a-zA-Z0-9]+$
+                      type: string
+                      x-kubernetes-validations:
+                      - message: must not be '.' or start with '..'
+                        rule: self != '.' && !self.startsWith('..')
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                  required:
+                  - key
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               strategicPatches:
                 description: Talos Linux machine configuration strategic merge patch
                   list.
                 items:
                   type: string
                 type: array
+                x-kubernetes-list-type: atomic
+              talosEndpoint:
+                description: TalosEndpoint separates transport from Kubernetes node
+                  addresses.
+                properties:
+                  address:
+                    minLength: 1
+                    type: string
+                  node:
+                    type: string
+                  serverName:
+                    minLength: 1
+                    type: string
+                required:
+                - address
+                - serverName
+                type: object
               talosVersion:
                 type: string
             required:
             - generateType
             type: object
+            x-kubernetes-validations:
+            - message: data cannot be combined with a Secret baseline
+              rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
+                || !has(self.data) || size(self.data) == 0'
+            - message: Secret baselines require none, controlplane or worker
+              rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
+                || self.generateType in [''none'', ''controlplane'', ''worker'']'
+            - message: TalosConfig requires exactly one Machine identity
+              rule: '!has(self.management) || size(self.management.machines) == 1'
           status:
             description: TalosConfigStatus defines the observed state of TalosConfig
             properties:
@@ -136,6 +359,32 @@ spec:
 
                   Deprecated: this field will be removed in the next apiVersion.
                 type: string
+              lastHandledReconcileAt:
+                description: LastHandledReconcileAt records the last explicit reconcile
+                  request handled.
+                type: string
+              management:
+                description: Management records inventory observation and activation.
+                properties:
+                  activatedRevision:
+                    type: string
+                  observation:
+                    description: ObservationStatus identifies a completed observation
+                      of the inventory.
+                    properties:
+                      id:
+                        type: string
+                      observedAt:
+                        format: date-time
+                        type: string
+                      revision:
+                        type: string
+                    required:
+                    - id
+                    - observedAt
+                    - revision
+                    type: object
+                type: object
               observedGeneration:
                 description: ObservedGeneration is the latest generation observed
                   by the controller.
@@ -282,6 +531,34 @@ spec:
                   - path
                   type: object
                 type: array
+                x-kubernetes-list-type: atomic
+              configRevision:
+                description: |-
+                  ConfigRevision requests reconciliation after a same-name input Secret changes.
+                  This is a non-secret revision; never put configuration or credentials here.
+                type: string
+              configSecretRef:
+                description: |-
+                  ConfigSecretRef supplies a complete baseline from a Secret in this object's namespace.
+                  It is mutually exclusive with Data and bypasses generation without changing the node's role.
+                properties:
+                  key:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[-._a-zA-Z0-9]+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must not be '.' or start with '..'
+                      rule: self != '.' && !self.startsWith('..')
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                required:
+                - key
+                - name
+                type: object
               data:
                 description: Machine configuration in case generateType=none.
                 type: string
@@ -351,12 +628,210 @@ spec:
                     - name
                     type: object
                 type: object
+              machineConfig:
+                description: MachineConfig retains per-node baseline and overlays
+                  without replacing shared patches.
+                properties:
+                  configPatches:
+                    items:
+                      properties:
+                        op:
+                          type: string
+                        path:
+                          type: string
+                        value:
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - op
+                      - path
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  configRevision:
+                    description: ConfigRevision is independent of the shared revision
+                      and contains no private data.
+                    type: string
+                  configSecretRef:
+                    description: ConfigSecretRef replaces only the base, never shared
+                      patches.
+                    properties:
+                      key:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[-._a-zA-Z0-9]+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: must not be '.' or start with '..'
+                          rule: self != '.' && !self.startsWith('..')
+                      name:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  strategicPatchSecretRefs:
+                    items:
+                      description: |-
+                        SecretKeyReference selects required data in a Secret in the TalosConfig's namespace.
+                        Neither arbitrary namespaces nor templated names or filesystem paths are supported.
+                      properties:
+                        key:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[-._a-zA-Z0-9]+$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: must not be '.' or start with '..'
+                            rule: self != '.' && !self.startsWith('..')
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  strategicPatches:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+              management:
+                description: Management opts an existing node into observation and
+                  approved management.
+                properties:
+                  approval:
+                    description: Approval explicitly authorizes the observed revision.
+                    properties:
+                      observationID:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                      revision:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                        type: string
+                    required:
+                    - observationID
+                    - revision
+                    type: object
+                  inventoryRevision:
+                    description: InventoryRevision identifies this non-secret inventory.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                    type: string
+                  machines:
+                    description: Machines pins names to immutable Kubernetes identities.
+                    items:
+                      description: MachineIdentityReference identifies a namespace-local
+                        Machine, not just its name.
+                      properties:
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 1000
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mode:
+                    default: Observe
+                    description: Mode defaults to Observe only when management is
+                      present.
+                    enum:
+                    - Observe
+                    - Managed
+                    type: string
+                required:
+                - inventoryRevision
+                - machines
+                type: object
+                x-kubernetes-validations:
+                - message: Managed requires approval matching inventoryRevision
+                  rule: self.mode != 'Managed' || (has(self.approval) && self.approval.revision
+                    == self.inventoryRevision)
+              strategicPatchSecretRefs:
+                description: StrategicPatchSecretRefs are applied in order after shared
+                  public patches.
+                items:
+                  description: |-
+                    SecretKeyReference selects required data in a Secret in the TalosConfig's namespace.
+                    Neither arbitrary namespaces nor templated names or filesystem paths are supported.
+                  properties:
+                    key:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[-._a-zA-Z0-9]+$
+                      type: string
+                      x-kubernetes-validations:
+                      - message: must not be '.' or start with '..'
+                        rule: self != '.' && !self.startsWith('..')
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                  required:
+                  - key
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               strategicPatches:
                 description: Talos Linux machine configuration strategic merge patch
                   list.
                 items:
                   type: string
                 type: array
+                x-kubernetes-list-type: atomic
+              talosEndpoint:
+                description: TalosEndpoint separates management transport from Kubernetes
+                  node addresses.
+                properties:
+                  address:
+                    description: Address is an explicit host:port, with bracketed
+                      IPv6 when applicable.
+                    minLength: 1
+                    type: string
+                  node:
+                    description: Node identifies a single target when the endpoint
+                      is an aggregated Talos proxy.
+                    type: string
+                  serverName:
+                    description: ServerName is the certificate verification/SNI name
+                      without a port.
+                    minLength: 1
+                    type: string
+                required:
+                - address
+                - serverName
+                type: object
               talosVersion:
                 description: |-
                   Version of Talos to generate machine configuration for, i.e. v1.0 (patch version may be omitted).
@@ -366,6 +841,15 @@ spec:
             required:
             - generateType
             type: object
+            x-kubernetes-validations:
+            - message: data cannot be combined with a Secret baseline
+              rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
+                || !has(self.data) || size(self.data) == 0'
+            - message: Secret baselines require none, controlplane or worker
+              rule: '!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef)))
+                || self.generateType in [''none'', ''controlplane'', ''worker'']'
+            - message: TalosConfig requires exactly one Machine identity
+              rule: '!has(self.management) || size(self.management.machines) == 1'
           status:
             description: TalosConfigStatus defines the observed state of TalosConfig
             properties:
@@ -469,6 +953,32 @@ spec:
                       dataSecretCreated is true when the Machine's bootstrap secret is created.
                       NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
                     type: boolean
+                type: object
+              lastHandledReconcileAt:
+                description: LastHandledReconcileAt records the last explicit reconcile
+                  request handled.
+                type: string
+              management:
+                description: Management records inventory observation and activation.
+                properties:
+                  activatedRevision:
+                    type: string
+                  observation:
+                    description: ObservationStatus identifies a completed observation
+                      of the inventory.
+                    properties:
+                      id:
+                        type: string
+                      observedAt:
+                        format: date-time
+                        type: string
+                      revision:
+                        type: string
+                    required:
+                    - id
+                    - observedAt
+                    - revision
+                    type: object
                 type: object
               observedGeneration:
                 description: |-

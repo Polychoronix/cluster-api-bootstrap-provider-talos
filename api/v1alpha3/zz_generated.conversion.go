@@ -17,6 +17,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	types "k8s.io/apimachinery/pkg/types"
 )
 
 func init() {
@@ -43,6 +44,76 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddGeneratedConversionFunc((*v1beta1.HostnameSpec)(nil), (*HostnameSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta1_HostnameSpec_To_v1alpha3_HostnameSpec(a.(*v1beta1.HostnameSpec), b.(*HostnameSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*MachineConfigOverlay)(nil), (*v1beta1.MachineConfigOverlay)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_MachineConfigOverlay_To_v1beta1_MachineConfigOverlay(a.(*MachineConfigOverlay), b.(*v1beta1.MachineConfigOverlay), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.MachineConfigOverlay)(nil), (*MachineConfigOverlay)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_MachineConfigOverlay_To_v1alpha3_MachineConfigOverlay(a.(*v1beta1.MachineConfigOverlay), b.(*MachineConfigOverlay), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*MachineIdentityReference)(nil), (*v1beta1.MachineIdentityReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_MachineIdentityReference_To_v1beta1_MachineIdentityReference(a.(*MachineIdentityReference), b.(*v1beta1.MachineIdentityReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.MachineIdentityReference)(nil), (*MachineIdentityReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_MachineIdentityReference_To_v1alpha3_MachineIdentityReference(a.(*v1beta1.MachineIdentityReference), b.(*MachineIdentityReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ManagementSpec)(nil), (*v1beta1.ManagementSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_ManagementSpec_To_v1beta1_ManagementSpec(a.(*ManagementSpec), b.(*v1beta1.ManagementSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.ManagementSpec)(nil), (*ManagementSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_ManagementSpec_To_v1alpha3_ManagementSpec(a.(*v1beta1.ManagementSpec), b.(*ManagementSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ManagementStatus)(nil), (*v1beta1.ManagementStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_ManagementStatus_To_v1beta1_ManagementStatus(a.(*ManagementStatus), b.(*v1beta1.ManagementStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.ManagementStatus)(nil), (*ManagementStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_ManagementStatus_To_v1alpha3_ManagementStatus(a.(*v1beta1.ManagementStatus), b.(*ManagementStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ObservationApproval)(nil), (*v1beta1.ObservationApproval)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_ObservationApproval_To_v1beta1_ObservationApproval(a.(*ObservationApproval), b.(*v1beta1.ObservationApproval), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.ObservationApproval)(nil), (*ObservationApproval)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_ObservationApproval_To_v1alpha3_ObservationApproval(a.(*v1beta1.ObservationApproval), b.(*ObservationApproval), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ObservationStatus)(nil), (*v1beta1.ObservationStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_ObservationStatus_To_v1beta1_ObservationStatus(a.(*ObservationStatus), b.(*v1beta1.ObservationStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.ObservationStatus)(nil), (*ObservationStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_ObservationStatus_To_v1alpha3_ObservationStatus(a.(*v1beta1.ObservationStatus), b.(*ObservationStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*SecretKeyReference)(nil), (*v1beta1.SecretKeyReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_SecretKeyReference_To_v1beta1_SecretKeyReference(a.(*SecretKeyReference), b.(*v1beta1.SecretKeyReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.SecretKeyReference)(nil), (*SecretKeyReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_SecretKeyReference_To_v1alpha3_SecretKeyReference(a.(*v1beta1.SecretKeyReference), b.(*SecretKeyReference), scope)
 	}); err != nil {
 		return err
 	}
@@ -103,6 +174,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddGeneratedConversionFunc((*v1beta1.TalosConfigTemplateSpec)(nil), (*TalosConfigTemplateSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta1_TalosConfigTemplateSpec_To_v1alpha3_TalosConfigTemplateSpec(a.(*v1beta1.TalosConfigTemplateSpec), b.(*TalosConfigTemplateSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*TalosEndpoint)(nil), (*v1beta1.TalosEndpoint)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_TalosEndpoint_To_v1beta1_TalosEndpoint(a.(*TalosEndpoint), b.(*v1beta1.TalosEndpoint), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.TalosEndpoint)(nil), (*TalosEndpoint)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_TalosEndpoint_To_v1alpha3_TalosEndpoint(a.(*v1beta1.TalosEndpoint), b.(*TalosEndpoint), scope)
 	}); err != nil {
 		return err
 	}
@@ -203,6 +284,172 @@ func Convert_v1beta1_HostnameSpec_To_v1alpha3_HostnameSpec(in *v1beta1.HostnameS
 	return autoConvert_v1beta1_HostnameSpec_To_v1alpha3_HostnameSpec(in, out, s)
 }
 
+func autoConvert_v1alpha3_MachineConfigOverlay_To_v1beta1_MachineConfigOverlay(in *MachineConfigOverlay, out *v1beta1.MachineConfigOverlay, s conversion.Scope) error {
+	out.ConfigSecretRef = (*v1beta1.SecretKeyReference)(unsafe.Pointer(in.ConfigSecretRef))
+	out.ConfigPatches = *(*[]v1beta1.ConfigPatches)(unsafe.Pointer(&in.ConfigPatches))
+	out.StrategicPatches = *(*[]string)(unsafe.Pointer(&in.StrategicPatches))
+	out.StrategicPatchSecretRefs = *(*[]v1beta1.SecretKeyReference)(unsafe.Pointer(&in.StrategicPatchSecretRefs))
+	out.ConfigRevision = in.ConfigRevision
+	return nil
+}
+
+// Convert_v1alpha3_MachineConfigOverlay_To_v1beta1_MachineConfigOverlay is an autogenerated conversion function.
+func Convert_v1alpha3_MachineConfigOverlay_To_v1beta1_MachineConfigOverlay(in *MachineConfigOverlay, out *v1beta1.MachineConfigOverlay, s conversion.Scope) error {
+	return autoConvert_v1alpha3_MachineConfigOverlay_To_v1beta1_MachineConfigOverlay(in, out, s)
+}
+
+func autoConvert_v1beta1_MachineConfigOverlay_To_v1alpha3_MachineConfigOverlay(in *v1beta1.MachineConfigOverlay, out *MachineConfigOverlay, s conversion.Scope) error {
+	out.ConfigSecretRef = (*SecretKeyReference)(unsafe.Pointer(in.ConfigSecretRef))
+	out.ConfigPatches = *(*[]ConfigPatches)(unsafe.Pointer(&in.ConfigPatches))
+	out.StrategicPatches = *(*[]string)(unsafe.Pointer(&in.StrategicPatches))
+	out.StrategicPatchSecretRefs = *(*[]SecretKeyReference)(unsafe.Pointer(&in.StrategicPatchSecretRefs))
+	out.ConfigRevision = in.ConfigRevision
+	return nil
+}
+
+// Convert_v1beta1_MachineConfigOverlay_To_v1alpha3_MachineConfigOverlay is an autogenerated conversion function.
+func Convert_v1beta1_MachineConfigOverlay_To_v1alpha3_MachineConfigOverlay(in *v1beta1.MachineConfigOverlay, out *MachineConfigOverlay, s conversion.Scope) error {
+	return autoConvert_v1beta1_MachineConfigOverlay_To_v1alpha3_MachineConfigOverlay(in, out, s)
+}
+
+func autoConvert_v1alpha3_MachineIdentityReference_To_v1beta1_MachineIdentityReference(in *MachineIdentityReference, out *v1beta1.MachineIdentityReference, s conversion.Scope) error {
+	out.Name = in.Name
+	out.UID = types.UID(in.UID)
+	return nil
+}
+
+// Convert_v1alpha3_MachineIdentityReference_To_v1beta1_MachineIdentityReference is an autogenerated conversion function.
+func Convert_v1alpha3_MachineIdentityReference_To_v1beta1_MachineIdentityReference(in *MachineIdentityReference, out *v1beta1.MachineIdentityReference, s conversion.Scope) error {
+	return autoConvert_v1alpha3_MachineIdentityReference_To_v1beta1_MachineIdentityReference(in, out, s)
+}
+
+func autoConvert_v1beta1_MachineIdentityReference_To_v1alpha3_MachineIdentityReference(in *v1beta1.MachineIdentityReference, out *MachineIdentityReference, s conversion.Scope) error {
+	out.Name = in.Name
+	out.UID = types.UID(in.UID)
+	return nil
+}
+
+// Convert_v1beta1_MachineIdentityReference_To_v1alpha3_MachineIdentityReference is an autogenerated conversion function.
+func Convert_v1beta1_MachineIdentityReference_To_v1alpha3_MachineIdentityReference(in *v1beta1.MachineIdentityReference, out *MachineIdentityReference, s conversion.Scope) error {
+	return autoConvert_v1beta1_MachineIdentityReference_To_v1alpha3_MachineIdentityReference(in, out, s)
+}
+
+func autoConvert_v1alpha3_ManagementSpec_To_v1beta1_ManagementSpec(in *ManagementSpec, out *v1beta1.ManagementSpec, s conversion.Scope) error {
+	out.Mode = v1beta1.ManagementMode(in.Mode)
+	out.InventoryRevision = in.InventoryRevision
+	out.Machines = *(*[]v1beta1.MachineIdentityReference)(unsafe.Pointer(&in.Machines))
+	out.Approval = (*v1beta1.ObservationApproval)(unsafe.Pointer(in.Approval))
+	return nil
+}
+
+// Convert_v1alpha3_ManagementSpec_To_v1beta1_ManagementSpec is an autogenerated conversion function.
+func Convert_v1alpha3_ManagementSpec_To_v1beta1_ManagementSpec(in *ManagementSpec, out *v1beta1.ManagementSpec, s conversion.Scope) error {
+	return autoConvert_v1alpha3_ManagementSpec_To_v1beta1_ManagementSpec(in, out, s)
+}
+
+func autoConvert_v1beta1_ManagementSpec_To_v1alpha3_ManagementSpec(in *v1beta1.ManagementSpec, out *ManagementSpec, s conversion.Scope) error {
+	out.Mode = ManagementMode(in.Mode)
+	out.InventoryRevision = in.InventoryRevision
+	out.Machines = *(*[]MachineIdentityReference)(unsafe.Pointer(&in.Machines))
+	out.Approval = (*ObservationApproval)(unsafe.Pointer(in.Approval))
+	return nil
+}
+
+// Convert_v1beta1_ManagementSpec_To_v1alpha3_ManagementSpec is an autogenerated conversion function.
+func Convert_v1beta1_ManagementSpec_To_v1alpha3_ManagementSpec(in *v1beta1.ManagementSpec, out *ManagementSpec, s conversion.Scope) error {
+	return autoConvert_v1beta1_ManagementSpec_To_v1alpha3_ManagementSpec(in, out, s)
+}
+
+func autoConvert_v1alpha3_ManagementStatus_To_v1beta1_ManagementStatus(in *ManagementStatus, out *v1beta1.ManagementStatus, s conversion.Scope) error {
+	out.Observation = (*v1beta1.ObservationStatus)(unsafe.Pointer(in.Observation))
+	out.ActivatedRevision = in.ActivatedRevision
+	return nil
+}
+
+// Convert_v1alpha3_ManagementStatus_To_v1beta1_ManagementStatus is an autogenerated conversion function.
+func Convert_v1alpha3_ManagementStatus_To_v1beta1_ManagementStatus(in *ManagementStatus, out *v1beta1.ManagementStatus, s conversion.Scope) error {
+	return autoConvert_v1alpha3_ManagementStatus_To_v1beta1_ManagementStatus(in, out, s)
+}
+
+func autoConvert_v1beta1_ManagementStatus_To_v1alpha3_ManagementStatus(in *v1beta1.ManagementStatus, out *ManagementStatus, s conversion.Scope) error {
+	out.Observation = (*ObservationStatus)(unsafe.Pointer(in.Observation))
+	out.ActivatedRevision = in.ActivatedRevision
+	return nil
+}
+
+// Convert_v1beta1_ManagementStatus_To_v1alpha3_ManagementStatus is an autogenerated conversion function.
+func Convert_v1beta1_ManagementStatus_To_v1alpha3_ManagementStatus(in *v1beta1.ManagementStatus, out *ManagementStatus, s conversion.Scope) error {
+	return autoConvert_v1beta1_ManagementStatus_To_v1alpha3_ManagementStatus(in, out, s)
+}
+
+func autoConvert_v1alpha3_ObservationApproval_To_v1beta1_ObservationApproval(in *ObservationApproval, out *v1beta1.ObservationApproval, s conversion.Scope) error {
+	out.Revision = in.Revision
+	out.ObservationID = in.ObservationID
+	return nil
+}
+
+// Convert_v1alpha3_ObservationApproval_To_v1beta1_ObservationApproval is an autogenerated conversion function.
+func Convert_v1alpha3_ObservationApproval_To_v1beta1_ObservationApproval(in *ObservationApproval, out *v1beta1.ObservationApproval, s conversion.Scope) error {
+	return autoConvert_v1alpha3_ObservationApproval_To_v1beta1_ObservationApproval(in, out, s)
+}
+
+func autoConvert_v1beta1_ObservationApproval_To_v1alpha3_ObservationApproval(in *v1beta1.ObservationApproval, out *ObservationApproval, s conversion.Scope) error {
+	out.Revision = in.Revision
+	out.ObservationID = in.ObservationID
+	return nil
+}
+
+// Convert_v1beta1_ObservationApproval_To_v1alpha3_ObservationApproval is an autogenerated conversion function.
+func Convert_v1beta1_ObservationApproval_To_v1alpha3_ObservationApproval(in *v1beta1.ObservationApproval, out *ObservationApproval, s conversion.Scope) error {
+	return autoConvert_v1beta1_ObservationApproval_To_v1alpha3_ObservationApproval(in, out, s)
+}
+
+func autoConvert_v1alpha3_ObservationStatus_To_v1beta1_ObservationStatus(in *ObservationStatus, out *v1beta1.ObservationStatus, s conversion.Scope) error {
+	out.Revision = in.Revision
+	out.ID = in.ID
+	out.ObservedAt = in.ObservedAt
+	return nil
+}
+
+// Convert_v1alpha3_ObservationStatus_To_v1beta1_ObservationStatus is an autogenerated conversion function.
+func Convert_v1alpha3_ObservationStatus_To_v1beta1_ObservationStatus(in *ObservationStatus, out *v1beta1.ObservationStatus, s conversion.Scope) error {
+	return autoConvert_v1alpha3_ObservationStatus_To_v1beta1_ObservationStatus(in, out, s)
+}
+
+func autoConvert_v1beta1_ObservationStatus_To_v1alpha3_ObservationStatus(in *v1beta1.ObservationStatus, out *ObservationStatus, s conversion.Scope) error {
+	out.Revision = in.Revision
+	out.ID = in.ID
+	out.ObservedAt = in.ObservedAt
+	return nil
+}
+
+// Convert_v1beta1_ObservationStatus_To_v1alpha3_ObservationStatus is an autogenerated conversion function.
+func Convert_v1beta1_ObservationStatus_To_v1alpha3_ObservationStatus(in *v1beta1.ObservationStatus, out *ObservationStatus, s conversion.Scope) error {
+	return autoConvert_v1beta1_ObservationStatus_To_v1alpha3_ObservationStatus(in, out, s)
+}
+
+func autoConvert_v1alpha3_SecretKeyReference_To_v1beta1_SecretKeyReference(in *SecretKeyReference, out *v1beta1.SecretKeyReference, s conversion.Scope) error {
+	out.Name = in.Name
+	out.Key = in.Key
+	return nil
+}
+
+// Convert_v1alpha3_SecretKeyReference_To_v1beta1_SecretKeyReference is an autogenerated conversion function.
+func Convert_v1alpha3_SecretKeyReference_To_v1beta1_SecretKeyReference(in *SecretKeyReference, out *v1beta1.SecretKeyReference, s conversion.Scope) error {
+	return autoConvert_v1alpha3_SecretKeyReference_To_v1beta1_SecretKeyReference(in, out, s)
+}
+
+func autoConvert_v1beta1_SecretKeyReference_To_v1alpha3_SecretKeyReference(in *v1beta1.SecretKeyReference, out *SecretKeyReference, s conversion.Scope) error {
+	out.Name = in.Name
+	out.Key = in.Key
+	return nil
+}
+
+// Convert_v1beta1_SecretKeyReference_To_v1alpha3_SecretKeyReference is an autogenerated conversion function.
+func Convert_v1beta1_SecretKeyReference_To_v1alpha3_SecretKeyReference(in *v1beta1.SecretKeyReference, out *SecretKeyReference, s conversion.Scope) error {
+	return autoConvert_v1beta1_SecretKeyReference_To_v1alpha3_SecretKeyReference(in, out, s)
+}
+
 func autoConvert_v1alpha3_TalosConfig_To_v1beta1_TalosConfig(in *TalosConfig, out *v1beta1.TalosConfig, s conversion.Scope) error {
 	out.ObjectMeta = in.ObjectMeta
 	if err := Convert_v1alpha3_TalosConfigSpec_To_v1beta1_TalosConfigSpec(&in.Spec, &out.Spec, s); err != nil {
@@ -286,6 +533,12 @@ func autoConvert_v1alpha3_TalosConfigSpec_To_v1beta1_TalosConfigSpec(in *TalosCo
 	if err := Convert_v1alpha3_HostnameSpec_To_v1beta1_HostnameSpec(&in.Hostname, &out.Hostname, s); err != nil {
 		return err
 	}
+	out.ConfigSecretRef = (*v1beta1.SecretKeyReference)(unsafe.Pointer(in.ConfigSecretRef))
+	out.StrategicPatchSecretRefs = *(*[]v1beta1.SecretKeyReference)(unsafe.Pointer(&in.StrategicPatchSecretRefs))
+	out.ConfigRevision = in.ConfigRevision
+	out.MachineConfig = (*v1beta1.MachineConfigOverlay)(unsafe.Pointer(in.MachineConfig))
+	out.TalosEndpoint = (*v1beta1.TalosEndpoint)(unsafe.Pointer(in.TalosEndpoint))
+	out.Management = (*v1beta1.ManagementSpec)(unsafe.Pointer(in.Management))
 	return nil
 }
 
@@ -298,6 +551,12 @@ func autoConvert_v1beta1_TalosConfigSpec_To_v1alpha3_TalosConfigSpec(in *v1beta1
 	out.TalosVersion = in.TalosVersion
 	out.GenerateType = in.GenerateType
 	out.Data = in.Data
+	out.ConfigSecretRef = (*SecretKeyReference)(unsafe.Pointer(in.ConfigSecretRef))
+	out.StrategicPatchSecretRefs = *(*[]SecretKeyReference)(unsafe.Pointer(&in.StrategicPatchSecretRefs))
+	out.ConfigRevision = in.ConfigRevision
+	out.MachineConfig = (*MachineConfigOverlay)(unsafe.Pointer(in.MachineConfig))
+	out.TalosEndpoint = (*TalosEndpoint)(unsafe.Pointer(in.TalosEndpoint))
+	out.Management = (*ManagementSpec)(unsafe.Pointer(in.Management))
 	out.ConfigPatches = *(*[]ConfigPatches)(unsafe.Pointer(&in.ConfigPatches))
 	out.StrategicPatches = *(*[]string)(unsafe.Pointer(&in.StrategicPatches))
 	if err := Convert_v1beta1_HostnameSpec_To_v1alpha3_HostnameSpec(&in.Hostname, &out.Hostname, s); err != nil {
@@ -308,6 +567,8 @@ func autoConvert_v1beta1_TalosConfigSpec_To_v1alpha3_TalosConfigSpec(in *v1beta1
 }
 
 func autoConvert_v1alpha3_TalosConfigStatus_To_v1beta1_TalosConfigStatus(in *TalosConfigStatus, out *v1beta1.TalosConfigStatus, s conversion.Scope) error {
+	out.Management = (*v1beta1.ManagementStatus)(unsafe.Pointer(in.Management))
+	out.LastHandledReconcileAt = in.LastHandledReconcileAt
 	// WARNING: in.Ready requires manual conversion: does not exist in peer-type
 	if err := v1.Convert_Pointer_string_To_string(&in.DataSecretName, &out.DataSecretName, s); err != nil {
 		return err
@@ -332,6 +593,8 @@ func autoConvert_v1alpha3_TalosConfigStatus_To_v1beta1_TalosConfigStatus(in *Tal
 }
 
 func autoConvert_v1beta1_TalosConfigStatus_To_v1alpha3_TalosConfigStatus(in *v1beta1.TalosConfigStatus, out *TalosConfigStatus, s conversion.Scope) error {
+	out.Management = (*ManagementStatus)(unsafe.Pointer(in.Management))
+	out.LastHandledReconcileAt = in.LastHandledReconcileAt
 	// WARNING: in.Initialization requires manual conversion: does not exist in peer-type
 	if err := v1.Convert_string_To_Pointer_string(&in.DataSecretName, &out.DataSecretName, s); err != nil {
 		return err
@@ -462,4 +725,28 @@ func autoConvert_v1beta1_TalosConfigTemplateSpec_To_v1alpha3_TalosConfigTemplate
 // Convert_v1beta1_TalosConfigTemplateSpec_To_v1alpha3_TalosConfigTemplateSpec is an autogenerated conversion function.
 func Convert_v1beta1_TalosConfigTemplateSpec_To_v1alpha3_TalosConfigTemplateSpec(in *v1beta1.TalosConfigTemplateSpec, out *TalosConfigTemplateSpec, s conversion.Scope) error {
 	return autoConvert_v1beta1_TalosConfigTemplateSpec_To_v1alpha3_TalosConfigTemplateSpec(in, out, s)
+}
+
+func autoConvert_v1alpha3_TalosEndpoint_To_v1beta1_TalosEndpoint(in *TalosEndpoint, out *v1beta1.TalosEndpoint, s conversion.Scope) error {
+	out.Address = in.Address
+	out.ServerName = in.ServerName
+	out.Node = in.Node
+	return nil
+}
+
+// Convert_v1alpha3_TalosEndpoint_To_v1beta1_TalosEndpoint is an autogenerated conversion function.
+func Convert_v1alpha3_TalosEndpoint_To_v1beta1_TalosEndpoint(in *TalosEndpoint, out *v1beta1.TalosEndpoint, s conversion.Scope) error {
+	return autoConvert_v1alpha3_TalosEndpoint_To_v1beta1_TalosEndpoint(in, out, s)
+}
+
+func autoConvert_v1beta1_TalosEndpoint_To_v1alpha3_TalosEndpoint(in *v1beta1.TalosEndpoint, out *TalosEndpoint, s conversion.Scope) error {
+	out.Address = in.Address
+	out.ServerName = in.ServerName
+	out.Node = in.Node
+	return nil
+}
+
+// Convert_v1beta1_TalosEndpoint_To_v1alpha3_TalosEndpoint is an autogenerated conversion function.
+func Convert_v1beta1_TalosEndpoint_To_v1alpha3_TalosEndpoint(in *v1beta1.TalosEndpoint, out *TalosEndpoint, s conversion.Scope) error {
+	return autoConvert_v1beta1_TalosEndpoint_To_v1alpha3_TalosEndpoint(in, out, s)
 }

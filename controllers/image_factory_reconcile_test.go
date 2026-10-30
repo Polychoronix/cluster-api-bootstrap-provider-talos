@@ -11,8 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	kubernetesScheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,10 +35,7 @@ type imageFactoryFixture struct {
 func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec, factory *fakeFactory) *imageFactoryFixture {
 	t.Helper()
 
-	scheme := runtime.NewScheme()
-	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, capiv1.AddToScheme(scheme))
-	require.NoError(t, bootstrapv1beta1.AddToScheme(scheme))
+	scheme := kubernetesScheme.Scheme
 
 	const owner = "machine-1"
 
@@ -54,7 +51,7 @@ func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec,
 		},
 		&bootstrapv1beta1.TalosConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: owner, Namespace: testNamespace,
+				Name: owner, Namespace: testNamespace, UID: "config-uid",
 				OwnerReferences: []metav1.OwnerReference{{APIVersion: capiv1.GroupVersion.String(), Kind: "Machine", Name: owner, UID: "owner-uid"}},
 			},
 			Spec: spec,
@@ -72,6 +69,7 @@ func newImageFactoryFixture(t *testing.T, spec bootstrapv1beta1.TalosConfigSpec,
 		client: c,
 		reconciler: &TalosConfigReconciler{
 			Client:       c,
+			APIReader:    c,
 			Log:          ctrl.Log.WithName("test"),
 			Scheme:       scheme,
 			ImageFactory: api,
@@ -135,9 +133,8 @@ func TestReconcileRendersTheResolvedInstallerImage(t *testing.T) {
 
 	secret := &corev1.Secret{}
 	require.NoError(t, f.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: cfg.Status.DataSecretName}, secret))
-	wantHash, err := bootstrapv1beta1.InPlaceConfigHash(cfg.Spec, "1.34.0", cfg.Status.ImageFactory.InstallerImage)
-	require.NoError(t, err)
-	assert.Equal(t, wantHash, secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation], "the hash must include the resolved image")
+	assert.NotContains(t, secret.Annotations, bootstrapv1beta1.InPlaceConfigHashAnnotation)
+	assert.Contains(t, string(secret.Data["inputFreshness"]), cfg.Status.ImageFactory.InstallerImage, "private freshness includes resolved image")
 }
 
 func TestReconcileWithoutImageFactoryBlockRendersNoImage(t *testing.T) {
