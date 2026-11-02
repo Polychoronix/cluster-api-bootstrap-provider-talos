@@ -146,12 +146,20 @@ func TestTaggedLocalReleaseUsesActualKustomizeAndOnlyPublicSources(t *testing.T)
 		if resource["kind"] == "CustomResourceDefinition" && resource["metadata"].(map[string]any)["name"] == "talosconfigs.bootstrap.cluster.x-k8s.io" {
 			configCRD = true
 			versions := resource["spec"].(map[string]any)["versions"].([]any)
+			require.Len(t, versions, 2, "both served TalosConfig API versions belong in the release")
+			served := make([]string, 0, len(versions))
 			for _, version := range versions {
+				served = append(served, version.(map[string]any)["name"].(string))
 				fields := version.(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
-				for _, name := range []string{"configSecretRef", "strategicPatchSecretRefs", "machineConfig", "configRevision", "management"} {
+				for _, name := range []string{"configSecretRef", "strategicPatchSecretRefs", "machineConfig", "configRevision", "manage"} {
 					require.Contains(t, fields, name, "both served API schemas belong in the release")
 				}
+				consent := fields["manage"].(map[string]any)
+				require.Equal(t, "boolean", consent["type"])
+				require.Equal(t, false, consent["default"])
+				require.NotContains(t, fields, "management", "retired management inventory must not ship in either served API")
 			}
+			require.ElementsMatch(t, []string{"v1alpha3", "v1beta1"}, served)
 		}
 	}
 	require.True(t, deployment, "requested controller image must be rendered in a deployment")

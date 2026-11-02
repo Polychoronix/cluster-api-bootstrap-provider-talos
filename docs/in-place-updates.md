@@ -235,13 +235,13 @@ intervention; initial or consumed next-generation rendering waits safely.
   current path rejects before operations; no durable equivalent is implemented.
   Correlated successful upgrade task evidence could be investigated if legacy
   support is selected, but MachineReady/request acceptance alone is insufficient.
-- Fresh controller-created bootstrap lineage supports generated and full Secret
-  baselines. Existing seed/pivot/adoption or ambiguous lineage does not automatically
-  acquire accepted intent or adoption approval; explicit observation/activation
-  remains separately reviewed.
+- Native bootstrap supports generated and full Secret-backed configurations.
+  Existing original seeds remain immutable; node updates require UID-bound live
+  observation and explicit `manage` consent, not accepted-seed lineage receipts
+  or an adoption approval API.
 - Real isolated CAPI core/runtime TLS and Talos mTLS/COSI/Lifecycle tests accompany
   the unit regressions. They use a controlled external node server, not hardware;
-  live Robot adoption/disruption and real Service DNS/dataplane remain user-run.
+  live Robot replacement/disruption and real Service DNS/dataplane remain user-run.
 
 ## MachinePools
 
