@@ -51,139 +51,71 @@ commits to the in-place path there is no fallback to replacement, so a node that
 returns from an upgrade reboot would otherwise hang. One hard power cycle is attempted, after
 which the update is left failed for an operator to inspect.
 
-## Declarative existing-node management
+## Unified native-node management
 
-An existing standalone Machine can use `TalosConfig.spec.management` without
-regenerating its installed bootstrap seed. Keep the Machine/Cluster/TC unpaused,
-retain its original `bootstrap.dataSecretName`, and associate an explicitly
-Observe TalosConfig before enabling a MachineDeployment/MachineSet. The core
-controller must already have settled the TC and InfraMachine controller owners
-on the exact Machine UID. Observe never creates associations or infrastructure.
+The `v0.9.0-craci.3` fork uses one flow for every CAPI-created node:
+bootstrap when needed, observe the running node, activate with explicit consent,
+then execute requested updates. Standalone `Machine` objects, MachineSet workers
+and TalosControlPlane children use the same observer and private activation state.
+Hand-installed nodes are replaced through the infrastructure provider, not adopted.
 
 ```yaml
-management:
-  mode: Observe
-  inventoryRevision: import-1
-  machines:
-    - name: existing-worker
-      uid: <existing-machine-uid>
+spec:
+  generateType: worker
+  manage: true
+  talosEndpoint:
+    address: talos-egress.example:50000
+    serverName: worker.example.ts.net
 ```
 
-The configuration must use a complete namespace-local Secret baseline and an
-explicit Talos management endpoint; standard workload kubeconfig and Talos mTLS
-Secrets must already exist. Observation compares complete active configuration,
-actual Node/provider identity and runtime evidence. `InventoryVerified` and
-`ManagementActivated` are distinct from bootstrap and operational Ready.
-No Secret contents or private fingerprints appear in public status or errors.
+`manage` defaults to `false`: observation is allowed, but Talos configuration/OS
+mutations are not. Set it on a concrete TalosConfig or its template; a TCP's own
+`spec.manage` propagates to its newly created children. Both served API versions
+preserve true and false edits through conversion, with or without conversion data.
+There are no mode, inventory-revision, approval-token or duplicated management-status
+fields. `ActivationReady` is a standard condition, distinct from bootstrap readiness.
 
-Management inventory and approval belong on concrete TalosConfigs, never on
-TalosConfigTemplates. Both served API schemas reject template management,
-including Observe mode, so a template cannot carry node-specific inventory or
-consent into future Machines. The schema source markers preserve this rule when
-regenerating CRDs. Both `v1alpha3` and `v1beta1` expose management and its public
-status; approval and status edits through a served alpha client take precedence
-over older conversion-data, including when that annotation is absent.
+A standalone Machine's original seed needs no owner-kind receipt. CABPT writes the
+normal immutable seed once; after core copies its name into the Machine, subsequent
+requested render output is separate. Activation never rewrites that original seed.
+Neither the old `acceptedIntent` field nor creation-origin marker annotations exist.
 
+Activation requires the exact live Machine, TalosConfig, InfraMachine and workload
+Node UID associations, providerID, settled Machine controller ownership and a real
+CABPT-owned original seed. The uncached observer renders the current namespace-local
+inputs, compares every Talos document to active configuration and verifies imported
+Talos CA trust. Actual kubelet-image and matching Node/Talos boot-ID witnesses are
+mandatory. Missing identity, private inputs or witnesses fail closed.
 
-After reviewing `status.management.observation`, author `mode: Managed` and
-`approval: {revision: import-1, observationID: <observed-id>}`. Approval requires
-a fresh uncached match of the immutable private snapshot; its public ID is opaque,
-not a Secret UID or content digest. Approval/mode/requestedAt and generation-only
-churn do not change unchanged observation identity. There is no TTL, periodic
-drift enforcement, renewal consent or additional per-operation approval API.
-Deleting/replacing a private snapshot cannot renew old approval at the same revision.
-The private snapshot includes the complete normalized live authority spec, not
-only the management subfield or current children. TCP desired configuration,
-overrides, versions, templates and replicas invalidate an unconsumed observation;
-only management.mode/approval and metadata bookkeeping are excluded. No private
-policy hash is published. Approved association cannot ignore desired-policy changes.
+Native generation can consume the cluster's existing `<cluster>-talos` bundle;
+a full `configSecretRef` baseline is optional, not an adoption prerequisite.
+Ordered Secret-backed patches remain private. A generation source binds complete
+Secret data; a key reference binds that key. No private bytes or fingerprints are
+published in CR status, annotations or errors.
 
-TCP consumers use the same exported ManagementSpec/ManagementStatus once for the
-complete configured Machine inventory. Observation does not require TCP ownership,
-but TC/Infra children must be owned by each exact Machine. All actual etcd members
-are collected independently, associated to Nodes/Machines and checked for consistent
-healthy voting views; unmatched, duplicated or learner membership fails closed.
-No fixed control-plane count or unseen-member cleanup is inferred.
+TCP activation is aggregate: the complete currently owned CAPI Machine inventory,
+all observed control-plane Nodes and healthy voting etcd members must agree. Foreign,
+unaccounted, duplicate or learner membership cannot authorize lifecycle work. The
+shared desired configuration is rendered with each native child's own Talos transport.
+Per-Machine UID override/owner-transfer machinery is removed; no observer adopts or
+creates Machines, changes existing owners or fabricates infrastructure status.
 
-TCP producers supply `ManagementObservationRequest.EffectiveTalosConfigs`, one
-canonical effective shared-plus-MachineUID policy preserving each actual TC
-name/namespace/UID. The engine re-reads the associated live TC for identity and
-live-spec pins, separately validates the effective spec against live authority
-shared/override policy, and resolves/renders it with the same `configinput` path.
-Both actual live spec and effective spec/source receipts stay in the private
-snapshot. Different live/effective representations may be semantically equivalent;
-unapplied shared or node-private policy differences fail observation, never trigger
-TC rewrites or Apply. Effective Secret rotation invalidates unconsumed approval.
-Effective inputs are required for TCP observation and approval; omitting them is
-a hard refusal before workload/Talos reads, not a fallback to unchanged live TC
-specs. A standalone TC may default to its own live spec. Untyped authority policy
-still undergoes common input/inventory validation: duplicate names/UIDs, foreign
-inventory entries, malformed references or overlay+shared MachineConfig conflicts
-are rejected rather than silently selecting a last override.
+Once activated, current requested policy changes use the same renderer and journaled
+executor without a second approval ceremony. The original activation snapshot stays
+immutable and UID-bound; accepted image state advances privately only after all
+operation steps have actual completion witnesses. Completion receipts still fence
+CAPI/core/owner cleanup. They are operation receipts, never bootstrap-seed receipts.
 
-Initial TCP owner transfer uses the shared private aggregate association transaction:
-`PrepareManagementAssociation` validates original approval and full fresh snapshot,
-freezes every old-to-exact-TCP Machine controller-owner change, and leaves activation
-pending. The TCP producer performs only its supported no-create Machine UID/RV CAS.
-`CompleteManagementAssociation` reobserves all members and activates only after every
-declared owner is exact and all original config/Node/Infra/source/runtime/etcd safety
-facts remain unchanged modulo the attested owner refs. Restart accepts only original
-or frozen desired owners; partial transfer never releases lifecycle. The original
-opaque observation ID and immutable snapshot are preserved, not refreshed as consent.
-Standalone approval has no owner delta and retains direct `ActivateManagement`.
+Readiness loss during an issued reboot remains a recovery wait on the same Node UID,
+not permission to reissue. New disruptive work requires fresh health checks. Pauses
+stop observation, activation and mutation; a malformed/recreated private activation
+record never selects a seed-based fallback. Native deleting-owner cleanup retains its
+separate UID-bound idle-operation and consumed-receipt checks.
 
-Missing input/association observations retry at the existing bounded reconciliation
-cadence. Successful Observe does not establish periodic drift enforcement. Removing
-management spec/status cannot bypass a retained private record; the APIReader and
-actual provider-owned accepted bootstrap intent are required for fresh-path absence.
-After full initial ownership, reviewed current target config/template/source changes
-do not require a second adoption approval or comparison to the original raw desired
-policy forever. Durable identity checks still require the actual workload Node UID,
-providerID, exact TC/Infra Machine owners, and original seed UID/bytes. Metadata-only
-Secret resourceVersion churn is harmless for durable identity/seed guards; initial
-observation/approval and requested render freshness retain exact source receipts.
-Durable authorization checks identity/provenance, not continuous Ready status.
-New disruptive issuance requires fresh Node readiness (and full CP health); an
-already-issued reboot/config update becoming NotReady remains pending until same-UID
-health recovery, with no new destructive call or completion receipt. Expected
-retirement deletion state is likewise lifecycle progress, not recreated identity.
-Missing or same-name recreated Node UID remains a hard identity failure.
-
-`ValidateManagementRetirement(ctx, APIReader, authority)` is a separate read-only
-already-deleting-authority lifecycle gate. It permits only exact prior durable
-activation/current member associations or no-record proved fresh accepted bootstrap
-lineage. Observe, foreign/recreated identities, pending owner associations, active
-Machine/TC/Infra in-place markers or hooks, Prepared/Released owner plans, ambiguous
-executor work and unconsumed completion receipts hold retirement. Genuinely clean
-consumed receipts/plans do not make an authority permanently undeletable. Strict
-pause remains a stop. Expected core-deleted children/workload Node do not revoke
-completed ownership; the existing core/provider transaction still owns drain,
-membership and physical deletion. This helper never permits new rendering, Apply,
-Upgrade/Reboot, bootstrap publication or approval, and normal runtime/observation
-validators continue rejecting deleting authorities.
-
-
-`Cluster.spec.paused` or a standard `cluster.x-k8s.io/paused` annotation on any
-authority/member stops observations, activation, new runtime calls and receipt
-cleanup. Only the standard Paused condition may be refreshed; historical inventory
-timestamps and reconcile-request status do not advance. `reconcile.fluxcd.io/requestedAt`
-is optional reobservation, never authorization or a pause bypass. No Flux dependency
-or separate observer is required. Already accepted remote work cannot be undone.
-
-Native replacement remains CAPI owner/template/replica/rollout-budget work, not
-a TC veto over MD/MS deletion. Stage and verify that owner choreography separately.
-New native Machines boot the reviewed target Talos release; upgrading an old
-installation first is not adoption or native provisioning. Older read-only
-capabilities are observed honestly: missing actual kubelet-image resources remain
-unknown, never replaced by desired image/version. The existing full in-place
-executor's stronger recovery requirements remain unchanged.
-
-An activated TCP's genuinely newly provisioned successor uses the existing
-positive initial-controller/template/Infra ownership lineage before publishing
-bootstrap data. It is not imported again and needs no second child approval.
-Subsequent requests require the actual CABPT-owned seed's accepted intent to
-match that Machine/TC UID pair; a marker or same-named Secret alone is insufficient.
-Original imported members continue to use their immutable activation associations.
+Ordinary initial provisioning remains possible before activation. CACPPT never calls
+Talos Bootstrap when the owning Cluster is already control-plane initialized; fresh
+Bootstrap inspection and its RPC share a 30-second deadline. Existing-node replacement
+and the manual Ceph health gate remain operator-controlled deployment steps.
 
 ## Enabling it
 

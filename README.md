@@ -143,9 +143,9 @@ with the same approved published version. Operator fetch URLs are repository
 | `BootstrapProvider/talos` | Actual approved matched version | `https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos/releases` |
 | `ControlPlaneProvider/talos` | Same approved matched version | `https://github.com/Polychoronix/cluster-api-control-plane-provider-talos/releases` |
 
-Keep the reviewed provider namespaces, configuration and adoption/rollout gates.
-These standard source overrides do not authorize replacing a live provider,
-adopting Machines or disrupting nodes; those remain separately reviewed steps.
+Keep the reviewed provider namespaces, configuration and rollout gates. Source
+selection does not authorize replacing a live provider or disrupting nodes; those
+remain separately reviewed deployment steps.
 
 ## Compatibility
 
@@ -159,12 +159,12 @@ legacy Talos runtime support. The OS-install observation contract is currently
 1.14; older capability support remains unresolved until equivalent observations
 are implemented and tested. See the actual
 [in-place change/runtime capability matrix](docs/in-place-updates.md#what-can-be-updated-in-place)
-and [existing-node management contract](docs/in-place-updates.md#declarative-existing-node-management).
+and [unified native-node management](docs/in-place-updates.md#unified-native-node-management).
 
 ### Historical community release series
 
 The preserved tables below describe the historical community releases, not the
-modified personal fork's verified runtime/adoption capabilities. A historical
+modified personal fork's verified runtime capabilities. A historical
 checkmark must not be used to infer lifecycle support for an older Talos version
 after this cutover.
 
@@ -205,8 +205,12 @@ capability matrix above.
 
 ## Usage
 
-CABPT is not used directly, but rather via CACPPT (`TalosControlPlane`) for control plane nodes or via `MachineDeployment` (`MachinePool`) for worker nodes.
-In either case, CABPT settings are passed via `TalosConfigTemplate` resource:
+CABPT generates bootstrap data for standalone `Machine` objects, MachineSet workers,
+MachinePools and CACPPT `TalosControlPlane` children. A standalone Machine references
+a concrete `TalosConfig`; deployment/topology owners clone a `TalosConfigTemplate`.
+The unreleased craci.3 flow observes CAPI-born nodes and activates requested updates
+with `spec.manage: true`, defaulting to observation only. Templates propagate consent;
+seed receipts, manifest approval tokens and hand-installed-node adoption are removed.
 
 ```yaml
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
@@ -305,15 +309,15 @@ reconciliation after a same-name Secret rotation. Shared and Machine revisions
 are independent; public patch/version changes do not need an extra revision.
 Secret changes alone do not apply live drift. Generated Secret data contains
 private `inputFreshness` metadata binding desired objects and Secret UID/version
-identities; runtime updates use the live TalosConfig output rather than an
-adopted Machine's original installation seed. No resolved private digest is
+identities; runtime updates use the live TalosConfig output rather than a
+Machine's immutable original installation seed. No resolved private digest is
 published on Machine/TalosConfig annotations or conditions. Existing MachinePool
 convergence annotations retain only the public spec/reference/revision token.
 MachineDeployment updates rotate the immutable `TalosConfigTemplate`: create a
 new named template containing the new public desired revision, then update the
 MachineDeployment bootstrap template reference. Do not edit an existing template
 in place. Both old and new MachineSets must have bootstrap templates for in-place
-planning; establish that association before initial owner adoption.
+planning; retain the normal core-created owner and template associations.
 
 On imported baselines, a resolved installer image changes only the image and
 retains the complete reviewed install/provisioning/disk-selection policy. Missing
