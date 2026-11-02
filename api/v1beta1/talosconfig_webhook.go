@@ -34,11 +34,8 @@ var _ admission.Validator[*TalosConfig] = &TalosConfig{}
 
 var _ admission.Defaulter[*TalosConfig] = &TalosConfig{}
 
-// Default preserves legacy bootstrap behavior when management is absent.
-func (r *TalosConfig) Default(_ context.Context, obj *TalosConfig) error {
-	if obj.Spec.Management != nil && obj.Spec.Management.Mode == "" {
-		obj.Spec.Management.Mode = ManagementModeObserve
-	}
+// Default leaves management consent false unless explicitly supplied.
+func (r *TalosConfig) Default(_ context.Context, _ *TalosConfig) error {
 	return nil
 }
 
@@ -81,8 +78,8 @@ func (r *TalosConfig) ValidateUpdate(ctx context.Context, oldObj *TalosConfig, n
 	specManagedByController := topology.IsDryRunRequest(req, r) || IsInPlaceUpdate(r) || isTopologyOwned(r)
 
 	newSpec, oldSpec := r.Spec, old.Spec
-	// Management approval and inventory are mutable independently of bootstrap inputs.
-	newSpec.Management, oldSpec.Management = nil, nil
+	// Consent may change without changing the bootstrap configuration.
+	newSpec.Manage, oldSpec.Manage = false, false
 	if !specManagedByController && !cmp.Equal(newSpec, oldSpec) {
 		return nil, apierrors.NewBadRequest("TalosConfig.Spec is immutable")
 	}

@@ -16,7 +16,6 @@ const (
 // TalosConfigSpec defines the desired state of TalosConfig
 // +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || !has(self.data) || size(self.data) == 0",message="data cannot be combined with a Secret baseline"
 // +kubebuilder:validation:XValidation:rule="!(has(self.configSecretRef) || (has(self.machineConfig) && has(self.machineConfig.configSecretRef))) || self.generateType in ['none', 'controlplane', 'worker']",message="Secret baselines require none, controlplane or worker"
-// +kubebuilder:validation:XValidation:rule="!has(self.management) || size(self.management.machines) == 1",message="TalosConfig requires exactly one Machine identity"
 type TalosConfigSpec struct {
 	TalosVersion string `json:"talosVersion,omitempty"` //talos version formatted like v0.8. used for backwards compatibility
 	GenerateType string `json:"generateType"`           //none,init,controlplane,worker mutually exclusive w/ data
@@ -44,9 +43,9 @@ type TalosConfigSpec struct {
 	// TalosEndpoint separates transport from Kubernetes node addresses.
 	// +optional
 	TalosEndpoint *TalosEndpoint `json:"talosEndpoint,omitempty"`
-	// Management opts an existing node into observation and approved management.
+	// Manage consents to activation after exact live observation; false is read-only.
 	// +optional
-	Management *ManagementSpec `json:"management,omitempty"`
+	Manage bool `json:"manage,omitempty"`
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
@@ -71,9 +70,6 @@ type HostnameSpec struct {
 
 // TalosConfigStatus defines the observed state of TalosConfig
 type TalosConfigStatus struct {
-	// Management records inventory observation and activation.
-	// +optional
-	Management *ManagementStatus `json:"management,omitempty"`
 	// LastHandledReconcileAt records the last explicit reconcile request handled.
 	// +optional
 	LastHandledReconcileAt string `json:"lastHandledReconcileAt,omitempty"`

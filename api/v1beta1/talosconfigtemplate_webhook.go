@@ -64,9 +64,6 @@ func (r *TalosConfigTemplate) ValidateDelete(ctx context.Context, obj *TalosConf
 func (r *TalosConfigTemplate) validate() error {
 	allErrs := ValidateImageFactory(field.NewPath("spec", "template", "spec", "imageFactory"), r.Spec.Template.Spec.ImageFactory)
 	allErrs = append(allErrs, ValidateConfigInputs(field.NewPath("spec", "template", "spec"), r.Spec.Template.Spec)...)
-	if r.Spec.Template.Spec.Management != nil {
-		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "template", "spec", "management"), "management is only supported on concrete TalosConfigs"))
-	}
 	if len(allErrs) == 0 {
 		return nil
 	}
