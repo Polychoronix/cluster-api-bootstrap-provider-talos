@@ -84,10 +84,14 @@ func TestFinalizationDisposableAPIFrozenOutputAndSources(t *testing.T) {
 			require.NoError(t, real.Create(t.Context(), infra))
 			generation := &corev1.Secret{}
 			kube := &corev1.Secret{}
-			for _, secret := range []*corev1.Secret{generation, kube} {
+			identity := &corev1.Secret{}
+			for _, secret := range []*corev1.Secret{generation, kube, identity} {
 				name := "cluster-talos"
 				if secret == kube {
 					name = "cluster-kubeconfig"
+				}
+				if secret == identity {
+					name = "cluster-talosconfig"
 				}
 				require.NoError(t, fixture.management.Get(t.Context(), client.ObjectKey{Namespace: "test", Name: name}, secret))
 				secret.UID = ""
@@ -98,10 +102,13 @@ func TestFinalizationDisposableAPIFrozenOutputAndSources(t *testing.T) {
 			require.NoError(t, err)
 			rendered, err := configinput.Render(resolved, configinput.RenderContext{Machine: machine, Cluster: cluster})
 			require.NoError(t, err)
-			accepted, err := op.EncodeAcceptedIntent(op.AcceptedIntent{MachineUID: machine.UID, TalosConfigUID: config.UID, Image: op.ImageIdentity{}})
-			require.NoError(t, err)
-			output := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "bootstrap", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(config, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": rendered.Data(), configinput.FreshnessKey: rendered.Freshness(), op.AcceptedIntentKey: accepted}}
+			output := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "bootstrap", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(config, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": rendered.Data(), configinput.FreshnessKey: rendered.Freshness()}}
 			require.NoError(t, real.Create(t.Context(), output))
+			authority := op.ManagementAuthority{Namespace: config.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: config.Name, UID: config.UID}
+			_, err = op.ActivateManagement(t.Context(), real, real, op.ManagementObservationRequest{Authority: authority, Cluster: cluster, Manage: true, Machines: []*clusterv1.Machine{machine}, TalosConfigs: []*bootstrapv1.TalosConfig{config}})
+			require.NoError(t, err)
+			accepted, err := op.AcceptedImage(t.Context(), real, machine, config)
+			require.NoError(t, err)
 			handler := NewHandler(real, real, fixture.handler.newNodeClient)
 			snapshot, ready, err := handler.snapshot(t.Context(), machine, kruntime.RawExtension{Object: config})
 			require.NoError(t, err)
@@ -137,13 +144,24 @@ func TestFinalizationDisposableAPIFrozenOutputAndSources(t *testing.T) {
 			} else {
 				require.Error(t, err)
 				require.NoError(t, real.Get(t.Context(), client.ObjectKeyFromObject(output), output))
-				require.Equal(t, accepted, output.Data[op.AcceptedIntentKey])
+				after, err := op.AcceptedImage(t.Context(), real, machine, config)
+				require.NoError(t, err)
+				require.Equal(t, accepted, after)
 				live := &corev1.Secret{}
 				require.NoError(t, real.Get(t.Context(), client.ObjectKeyFromObject(original), live))
 				require.Empty(t, live.Data[op.ReceiptKey])
 			}
 			// Test-only resources are deleted directly; no provider/CAPH physical controller is installed.
-			for _, obj := range []client.Object{original, output, generation, kube, infra, config, machine, cluster} {
+			records := &corev1.SecretList{}
+			require.NoError(t, real.List(t.Context(), records, client.InNamespace("test")))
+			for i := range records.Items {
+				record := &records.Items[i]
+				owner := metav1.GetControllerOf(record)
+				if owner != nil && owner.UID == config.UID && record.Name != output.Name && record.Name != original.Name {
+					require.NoError(t, real.Delete(t.Context(), record))
+				}
+			}
+			for _, obj := range []client.Object{original, output, generation, kube, identity, infra, config, machine, cluster} {
 				require.NoError(t, real.Delete(t.Context(), obj))
 			}
 		})

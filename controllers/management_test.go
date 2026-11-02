@@ -1,65 +1,47 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
+// This Source Code Form is subject to the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 package controllers
 
 import (
-	"testing"
-
+	"context"
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"testing"
 )
 
-func TestManagementPausedMachineOnlyRefreshesPausedCondition(t *testing.T) {
-	scheme := runtime.NewScheme()
-	require.NoError(t, bootstrapv1.AddToScheme(scheme))
-	require.NoError(t, clusterv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
-	controller := true
-	tc := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "config", UID: "tc", Generation: 9, Annotations: map[string]string{"reconcile.fluxcd.io/requestedAt": "new"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: clusterv1.GroupVersion.String(), Kind: "Machine", Name: "worker", UID: "machine", Controller: &controller}}}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "none", Management: &bootstrapv1.ManagementSpec{Mode: bootstrapv1.ManagementModeObserve, InventoryRevision: "inventory", Machines: []bootstrapv1.MachineIdentityReference{{Name: "worker", UID: "machine"}}}}, Status: bootstrapv1.TalosConfigStatus{ObservedGeneration: 3, LastHandledReconcileAt: "old", Management: &bootstrapv1.ManagementStatus{Observation: &bootstrapv1.ObservationStatus{Revision: "old", ID: "opaque", ObservedAt: metav1.Now()}}}}
-	m := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "worker", UID: "machine", Annotations: map[string]string{clusterv1.PausedAnnotation: ""}}}
-	m.Spec.ClusterName = "cluster"
-	cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cluster", UID: "cluster"}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(tc).WithObjects(tc, m, cluster).Build()
-	r := &TalosConfigReconciler{Client: c, APIReader: c, Scheme: scheme, Log: ctrl.Log}
-	before := &bootstrapv1.TalosConfig{}
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(tc), before))
-	_, e := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tc)})
-	require.NoError(t, e)
-	got := &bootstrapv1.TalosConfig{}
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(tc), got))
-	require.Equal(t, before.Status.ObservedGeneration, got.Status.ObservedGeneration)
-	require.Equal(t, before.Status.Management, got.Status.Management)
-	require.Equal(t, "old", got.Status.LastHandledReconcileAt)
-	require.Len(t, got.Status.Conditions, 1)
-	require.Equal(t, clusterv1.PausedCondition, got.Status.Conditions[0].Type)
-	secrets := &corev1.SecretList{}
-	require.NoError(t, c.List(t.Context(), secrets))
-	require.Empty(t, secrets.Items)
-}
-
-func TestManagementUnassociatedObserveDoesNotGenerate(t *testing.T) {
-	scheme := runtime.NewScheme()
-	require.NoError(t, bootstrapv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
-	tc := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "config", UID: "tc"}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "worker", Management: &bootstrapv1.ManagementSpec{Mode: bootstrapv1.ManagementModeObserve, InventoryRevision: "inventory", Machines: []bootstrapv1.MachineIdentityReference{{Name: "worker", UID: "machine"}}}}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(tc).WithObjects(tc).Build()
-	r := &TalosConfigReconciler{Client: c, APIReader: c, Scheme: scheme, Log: ctrl.Log}
-	result, e := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tc)})
-	require.NoError(t, e)
-	require.Positive(t, result.RequeueAfter, "pending association must retry without an arbitrary external event")
-	secrets := &corev1.SecretList{}
-	require.NoError(t, c.List(t.Context(), secrets))
-	require.Empty(t, secrets.Items)
-	got := &bootstrapv1.TalosConfig{}
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(tc), got))
-	require.Empty(t, got.Status.DataSecretName)
-	require.Nil(t, got.Status.Initialization.DataSecretCreated)
+func TestStandaloneBootstrapThenObservationDoesNotRequireSeedReceipt(t *testing.T) {
+	f := newImageFactoryFixture(t, bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.14", Manage: true}, nil)
+	machine := &clusterv1.Machine{}
+	require.NoError(t, f.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "machine-1"}, machine))
+	machine.Spec.Bootstrap.ConfigRef = clusterv1.ContractVersionedObjectReference{APIGroup: bootstrapv1.GroupVersion.Group, Kind: "TalosConfig", Name: "machine-1"}
+	require.NoError(t, f.client.Update(context.Background(), machine))
+	cfg := f.config(t)
+	cfg.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(machine, clusterv1.GroupVersion.WithKind("Machine"))}
+	require.NoError(t, f.client.Update(context.Background(), cfg))
+	require.NoError(t, f.reconcile(t))
+	cfg = f.config(t)
+	require.True(t, ptr.Deref(cfg.Status.Initialization.DataSecretCreated, false))
+	seed := f.secret(t, cfg.Status.DataSecretName)
+	require.NotContains(t, seed.Data, "acceptedIntent")
+	require.Equal(t, cfg.UID, metav1.GetControllerOf(seed).UID)
+	machine.Spec.Bootstrap.DataSecretName = ptr.To(cfg.Status.DataSecretName)
+	require.NoError(t, f.client.Update(context.Background(), machine))
+	for range 3 {
+		_, err := f.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cfg)})
+		require.NoError(t, err)
+		cfg = f.config(t)
+		require.True(t, ptr.Deref(cfg.Status.Initialization.DataSecretCreated, false))
+		for _, c := range cfg.Status.Conditions {
+			require.NotEqual(t, "ManagementRequired", c.Reason)
+		}
+	}
+	after := f.secret(t, seed.Name)
+	require.Equal(t, seed.Data, after.Data)
 }

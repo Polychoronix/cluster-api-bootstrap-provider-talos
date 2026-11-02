@@ -12,76 +12,44 @@ import (
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ManagementAuthorityForMachine resolves the one live consent authority. CP
-// children read the exact TCP controller object; they never inherit consent from
-// a name, a noncontroller reference or a second child approval.
-func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (ManagementAuthority, *bootstrapv1.ManagementSpec, error) {
-	if reader == nil {
-		return ManagementAuthority{}, nil, managementError("APIReader required")
-	}
-	if m == nil || tc == nil || m.Namespace != tc.Namespace || m.Spec.Bootstrap.ConfigRef.APIGroup != bootstrapv1.GroupVersion.Group || m.Spec.Bootstrap.ConfigRef.Kind != "TalosConfig" || m.Spec.Bootstrap.ConfigRef.Name != tc.Name || !managementController(tc, m) {
-		return ManagementAuthority{}, nil, managementError("Machine bootstrap association")
+// ManagementAuthorityForMachine resolves exact live consent, not seed provenance.
+func ManagementAuthorityForMachine(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (ManagementAuthority, bool, error) {
+	if reader == nil || m == nil || tc == nil || m.Namespace != tc.Namespace || m.Spec.Bootstrap.ConfigRef.APIGroup != bootstrapv1.GroupVersion.Group || m.Spec.Bootstrap.ConfigRef.Kind != "TalosConfig" || m.Spec.Bootstrap.ConfigRef.Name != tc.Name || !managementController(tc, m) {
+		return ManagementAuthority{}, false, managementError("Machine bootstrap association")
 	}
 	if managementPaused(m) || managementPaused(tc) {
-		return ManagementAuthority{}, nil, ErrManagementPaused
+		return ManagementAuthority{}, false, ErrManagementPaused
 	}
 	cluster := &clusterv1.Cluster{}
 	if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.ClusterName}, cluster) != nil {
-		return ManagementAuthority{}, nil, managementError("Cluster lookup")
+		return ManagementAuthority{}, false, managementError("Cluster lookup")
 	}
-	if managementPaused(cluster) || (cluster.Spec.Paused != nil && *cluster.Spec.Paused) {
-		return ManagementAuthority{}, nil, ErrManagementPaused
+	if managementPaused(cluster) || cluster.Spec.Paused != nil && *cluster.Spec.Paused {
+		return ManagementAuthority{}, false, ErrManagementPaused
 	}
 	if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
-		if tc.Spec.Management != nil {
-			return ManagementAuthority{}, nil, managementError("independent control-plane consent")
-		}
 		owner := metav1.GetControllerOf(m)
 		if owner == nil || owner.Kind != "TalosControlPlane" || managementGroup(owner.APIVersion) != "controlplane.cluster.x-k8s.io" {
-			return ManagementAuthority{}, nil, managementError("control-plane authority association")
+			return ManagementAuthority{}, false, managementError("control-plane authority association")
 		}
 		a := ManagementAuthority{Namespace: m.Namespace, APIVersion: owner.APIVersion, Kind: owner.Kind, Name: owner.Name, UID: owner.UID}
 		tcp := &unstructured.Unstructured{}
 		tcp.SetAPIVersion(owner.APIVersion)
 		tcp.SetKind(owner.Kind)
 		if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: owner.Name}, tcp) != nil || tcp.GetUID() != owner.UID || !tcp.GetDeletionTimestamp().IsZero() {
-			return a, nil, managementError("live control-plane authority")
+			return a, false, managementError("live control-plane authority")
 		}
 		if managementPaused(tcp) {
-			return a, nil, ErrManagementPaused
+			return a, false, ErrManagementPaused
 		}
-		spec, found, e := unstructured.NestedMap(tcp.Object, "spec", "management")
-		if e != nil {
-			return a, nil, managementError("authority management decode")
-		}
-		if !found {
-			if _, _, _, err := readManagement(ctx, reader, a); err == nil {
-				return a, nil, managementError("management declaration removed")
-			} else if err != ErrNotFound {
-				return a, nil, err
-			}
-			return a, nil, nil
-		}
-		management := &bootstrapv1.ManagementSpec{}
-		if runtime.DefaultUnstructuredConverter.FromUnstructured(spec, management) != nil {
-			return a, nil, managementError("authority management decode")
-		}
-		return a, management, nil
+		manage, _, err := unstructured.NestedBool(tcp.Object, "spec", "manage")
+		return a, manage, err
 	}
-	a := ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}
-	if tc.Spec.Management == nil {
-		if _, _, _, err := readManagement(ctx, reader, a); err == nil {
-			return a, nil, managementError("management declaration removed")
-		} else if err != ErrNotFound {
-			return a, nil, err
-		}
-	}
-	return a, tc.Spec.Management, nil
+	return ManagementAuthority{Namespace: tc.Namespace, APIVersion: bootstrapv1.GroupVersion.String(), Kind: "TalosConfig", Name: tc.Name, UID: tc.UID}, tc.Spec.Manage, nil
 }
 
 // ValidateManagedMachine checks only reads before new runtime/receipt work. For
@@ -109,32 +77,13 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 	if e != nil {
 		return e
 	}
-	if spec == nil {
-		// Existing provider-generated accepted intent is checked by the runtime
-		// transaction. An orphaned adoption record must not select the fresh path.
-		if _, _, _, e := readManagement(ctx, reader, a); e == nil {
-			return managementError("management declaration removed")
-		} else if e != ErrNotFound {
-			return e
-		}
-		return ValidateFreshBootstrapIntent(ctx, reader, m, tc)
+	if !spec {
+		return managementError("management consent absent")
 	}
 	if e := ValidateManagementActivation(ctx, reader, a, spec); e != nil {
 		return e
 	}
-	if a.Kind == "TalosControlPlane" && tc.Annotations[InitialControlPlaneNameAnnotation] == a.Name && tc.Annotations[InitialControlPlaneUIDAnnotation] == string(a.UID) && m.Spec.Bootstrap.DataSecretName != nil {
-		seed := &corev1.Secret{}
-		if reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: *m.Spec.Bootstrap.DataSecretName}, seed) == nil {
-			owner := metav1.GetControllerOf(seed)
-			if accepted, err := DecodeAcceptedIntent(seed.Data[AcceptedIntentKey]); owner != nil && owner.APIVersion == bootstrapv1.GroupVersion.String() && owner.Kind == "TalosConfig" && owner.Name == tc.Name && owner.UID == tc.UID && err == nil && accepted.MachineUID == m.UID && accepted.TalosConfigUID == tc.UID {
-				if err := validateManagementMemberOwners(ctx, reader, m, tc); err != nil {
-					return err
-				}
-				return nil
-			}
-		}
-	}
-	_, record, payload, e := readManagement(ctx, reader, a)
+	_, _, payload, e := readManagement(ctx, reader, a)
 	if e != nil {
 		return e
 	}
@@ -148,11 +97,6 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 				return managementError("activated association changed")
 			}
 			expectedOwners := member.Machine.OwnerReferences
-			for _, association := range record.Associations {
-				if association.Machine.UID == m.UID && association.Completed {
-					expectedOwners = association.After
-				}
-			}
 			if !reflect.DeepEqual(m.OwnerReferences, expectedOwners) {
 				return managementError("activated owner association changed")
 			}
@@ -169,7 +113,7 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 			if err := validateManagementNode(ctx, reader, safety, &member); err != nil {
 				return err
 			}
-			if m.Spec.Bootstrap.DataSecretName == nil || *m.Spec.Bootstrap.DataSecretName != member.Seed.Name {
+			if member.Seed.Name == "" || m.Spec.Bootstrap.DataSecretName == nil || *m.Spec.Bootstrap.DataSecretName != member.Seed.Name {
 				return managementError("original seed reference changed")
 			}
 			seed := &corev1.Secret{}
@@ -182,34 +126,54 @@ func ValidateManagedMachine(ctx context.Context, reader client.Reader, m *cluste
 	return managementError("Machine outside activated inventory")
 }
 
-// ManagementAcceptedIntent supplies the original reviewed image intent for a
-// newly separated desired output. It never changes the installation seed.
-func ManagementAcceptedIntent(ctx context.Context, reader client.Reader, a ManagementAuthority, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (AcceptedIntent, error) {
-	_, r, payload, e := readManagement(ctx, reader, a)
-	if e != nil {
-		return AcceptedIntent{}, e
+// AcceptedImage reads the single activated UID-bound image state, never an output receipt.
+func AcceptedImage(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (ImageIdentity, error) {
+	a, manage, err := ManagementAuthorityForMachine(ctx, reader, m, tc)
+	if err != nil {
+		return ImageIdentity{}, err
 	}
-	if !r.Activated {
-		return AcceptedIntent{}, managementError("activation required")
+	if err = ValidateManagementActivation(ctx, reader, a, manage); err != nil {
+		return ImageIdentity{}, err
+	}
+	_, record, payload, err := readManagement(ctx, reader, a)
+	if err != nil {
+		return ImageIdentity{}, err
 	}
 	safety := &managementSafety{}
 	if json.Unmarshal(payload, safety) != nil {
-		return AcceptedIntent{}, managementError("snapshot decode")
+		return ImageIdentity{}, managementError("activation snapshot decode")
 	}
 	for _, member := range safety.Members {
 		if member.Machine.UID == m.UID && member.TalosConfig.UID == tc.UID {
-			var originalSpec bootstrapv1.TalosConfigSpec
-			if json.Unmarshal(member.EffectiveSpec, &originalSpec) != nil {
-				return AcceptedIntent{}, managementError("original configuration intent")
+			image, ok := record.AcceptedImages[m.UID]
+			if !ok {
+				return ImageIdentity{}, managementError("accepted image unavailable")
 			}
-			image, e := ConfigurationImage(member.Runtime.Configuration, originalSpec)
-			if e != nil {
-				return AcceptedIntent{}, managementError("reviewed original installer identity")
-			}
-			return AcceptedIntent{MachineUID: m.UID, TalosConfigUID: tc.UID, Image: image}, nil
+			return image, nil
 		}
 	}
-	return AcceptedIntent{}, managementError("accepted inventory")
+	return ImageIdentity{}, managementError("accepted inventory")
+}
+
+// RecordAcceptedImage advances only after a UID-bound operation was observed.
+func RecordAcceptedImage(ctx context.Context, c client.Client, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig, image ImageIdentity) error {
+	if _, err := AcceptedImage(ctx, reader, m, tc); err != nil {
+		return err
+	}
+	a, _, err := ManagementAuthorityForMachine(ctx, reader, m, tc)
+	if err != nil {
+		return err
+	}
+	secret, record, _, err := readManagement(ctx, reader, a)
+	if err != nil {
+		return err
+	}
+	record.AcceptedImages[m.UID] = image
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return PatchData(ctx, c, secret, map[string][]byte{managementRecordKey: encoded})
 }
 
 func validateManagementMemberOwners(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) error {

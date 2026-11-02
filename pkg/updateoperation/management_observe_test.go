@@ -44,6 +44,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,10 +53,11 @@ import (
 
 type managementRPC struct {
 	machineapi.UnimplementedMachineServiceServer
-	members []*machineapi.EtcdMember
-	self    uint64
-	leader  uint64
-	nodeUID types.UID
+	members   []*machineapi.EtcdMember
+	self      uint64
+	leader    uint64
+	nodeUID   types.UID
+	resources state.State
 }
 
 func (s *managementRPC) EtcdMemberList(context.Context, *machineapi.EtcdMemberListRequest) (*machineapi.EtcdMemberListResponse, error) {
@@ -101,24 +103,24 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 	cluster.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: "api.example.test", Port: 6443}
 	cluster.Spec.ClusterNetwork.Pods.CIDRBlocks = input.PodNet
 	cluster.Spec.ClusterNetwork.Services.CIDRBlocks = input.ServiceNet
-	spec := &bootstrapv1.ManagementSpec{Mode: bootstrapv1.ManagementModeObserve, InventoryRevision: "inventory-1"}
 	authority := ManagementAuthority{Namespace: "tenant", APIVersion: "controlplane.cluster.x-k8s.io/v1beta1", Kind: "TalosControlPlane", Name: "controlplane", UID: "authority-uid"}
 	tcp := &unstructured.Unstructured{Object: map[string]any{"apiVersion": authority.APIVersion, "kind": authority.Kind, "metadata": map[string]any{"namespace": authority.Namespace, "name": authority.Name, "uid": string(authority.UID)}}}
 	objects := []client.Object{cluster, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cluster-talosconfig", UID: "identity-uid"}, Data: map[string][]byte{"talosconfig": identity}}}
 	crd := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": map[string]any{"name": "metalmachines.infrastructure.example.test"}, "spec": map[string]any{"group": "infrastructure.example.test", "names": map[string]any{"kind": "MetalMachine"}, "versions": []any{map[string]any{"name": "v1beta1", "served": true, "storage": true}}}}}
 	objects = append(objects, crd)
-	request := ManagementObservationRequest{Authority: authority, Cluster: cluster, Spec: spec}
+	request := ManagementObservationRequest{Authority: authority, Cluster: cluster, Manage: false}
 	nodes := []corev1.Node{}
 	servers := []*managementRPC{}
 	memberView := []*machineapi.EtcdMember{}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		memberView = append(memberView, &machineapi.EtcdMember{Id: uint64(i + 1), Hostname: fmt.Sprintf("node-%d", i), PeerUrls: []string{fmt.Sprintf("https://node-%d:2380", i)}, ClientUrls: []string{fmt.Sprintf("https://node-%d:2379", i)}})
 	}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name := fmt.Sprintf("node-%d", i)
 		uid := types.UID(fmt.Sprintf("machine-%d", i))
 		controller := true
 		m := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name, UID: uid, Labels: map[string]string{clusterv1.MachineControlPlaneLabel: ""}}}
+		m.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(tcp, schema.GroupVersionKind{Group: "controlplane.cluster.x-k8s.io", Version: "v1beta1", Kind: "TalosControlPlane"})}
 		m.Spec.ClusterName = cluster.Name
 		m.Spec.ProviderID = "metal://" + name
 		m.Spec.Version = "v1.37.0"
@@ -144,7 +146,7 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 		for _, r := range []resource.Resource{configresource.NewMachineConfig(provider), boot, version, kubelet} {
 			require.NoError(t, resources.Create(t.Context(), r))
 		}
-		rpc := &managementRPC{members: memberView, self: uint64(i + 1)}
+		rpc := &managementRPC{members: memberView, self: uint64(i + 1), resources: resources}
 		servers = append(servers, rpc)
 		listener, e := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, e)
@@ -156,10 +158,9 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 		tc := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name, UID: types.UID("tc-" + name), OwnerReferences: []metav1.OwnerReference{owner}}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "controlplane", TalosVersion: "v1.14.2", ConfigSecretRef: &bootstrapv1.SecretKeyReference{Name: name + "-baseline", Key: "config"}, TalosEndpoint: &bootstrapv1.TalosEndpoint{Address: listener.Addr().String(), ServerName: "talos.example.test"}}}
 		infra := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "infrastructure.example.test/v1beta1", "kind": "MetalMachine", "metadata": map[string]any{"namespace": "tenant", "name": name, "uid": "infra-" + name}, "spec": map[string]any{"providerID": m.Spec.ProviderID}}}
 		infra.SetOwnerReferences([]metav1.OwnerReference{owner})
-		objects = append(objects, m, tc, infra, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name + "-baseline", UID: types.UID("baseline-" + name)}, Data: map[string][]byte{"config": data}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: seedName, UID: types.UID("seed-" + name)}, Data: map[string][]byte{"value": data}})
+		objects = append(objects, m, tc, infra, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name + "-baseline", UID: types.UID("baseline-" + name)}, Data: map[string][]byte{"config": data}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: seedName, UID: types.UID("seed-" + name), OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(tc, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": data}})
 		request.Machines = append(request.Machines, m)
 		request.TalosConfigs = append(request.TalosConfigs, tc)
-		spec.Machines = append(spec.Machines, bootstrapv1.MachineIdentityReference{Name: name, UID: uid})
 	}
 	workload := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -198,44 +199,51 @@ func managementTLSFixture(t *testing.T, count int) (*assigningClient, Management
 	t.Cleanup(workload.Close)
 	kube := fmt.Sprintf("apiVersion: v1\nkind: Config\nclusters:\n- name: cluster\n  cluster:\n    server: %s\n    insecure-skip-tls-verify: true\ncontexts:\n- name: cluster\n  context:\n    cluster: cluster\n    user: user\ncurrent-context: cluster\nusers:\n- name: user\n  user: {}\n", workload.URL)
 	objects = append(objects, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cluster-kubeconfig", UID: "kubeconfig-uid"}, Data: map[string][]byte{"value": []byte(kube)}})
-	managementMap, e := runtime.DefaultUnstructuredConverter.ToUnstructured(spec)
+	shared, e := runtime.DefaultUnstructuredConverter.ToUnstructured(&request.TalosConfigs[0].Spec)
 	require.NoError(t, e)
-	tcp.Object["spec"] = map[string]any{"management": managementMap}
+	tcp.Object["spec"] = map[string]any{"manage": false, "controlPlaneConfig": map[string]any{"controlplane": shared}}
 	objects = append(objects, tcp)
 	management := &assigningClient{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()}
-	setEffectivePolicy(t, management, management, &request, false, false)
+	request.EffectiveTalosConfigs = append([]*bootstrapv1.TalosConfig(nil), request.TalosConfigs...)
 	return management, request, servers
 }
 
-func TestObserveManagementUnownedTCPGenericTopologyAndApproval(t *testing.T) {
-	for _, count := range []int{1, 5} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			c, request, servers := managementTLSFixture(t, count)
-			o, e := ObserveManagement(t.Context(), c, request)
-			require.NoError(t, e)
-			require.Len(t, o.safety.Etcd, count)
-			require.True(t, o.Summary().InventoryVerified)
-			first, e := RecordManagementObservation(t.Context(), c, c, o)
-			require.NoError(t, e)
-			request.Spec.Mode = bootstrapv1.ManagementModeManaged
-			request.Spec.Approval = &bootstrapv1.ObservationApproval{Revision: request.Spec.InventoryRevision, ObservationID: first.Observation.ID}
-			tcp := &unstructured.Unstructured{}
-			tcp.SetAPIVersion(request.Authority.APIVersion)
-			tcp.SetKind(request.Authority.Kind)
-			require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "tenant", Name: "controlplane"}, tcp))
-			m, e := runtime.DefaultUnstructuredConverter.ToUnstructured(request.Spec)
-			require.NoError(t, e)
-			tcp.Object["spec"].(map[string]any)["management"] = m
-			tcp.SetGeneration(tcp.GetGeneration() + 1)
-			tcp.SetAnnotations(map[string]string{"reconcile.fluxcd.io/requestedAt": "approve"})
-			require.NoError(t, c.Update(t.Context(), tcp))
-			activated, e := associateAll(t, c, c, request)
-			require.NoError(t, e)
-			require.Equal(t, first.Observation.ID, activated.Observation.ID)
-			require.Equal(t, "inventory-1", activated.ActivatedRevision)
-			servers[0].members = append(servers[0].members, &machineapi.EtcdMember{Id: 100, Hostname: "unaccounted", PeerUrls: []string{"https://extra:2380"}, ClientUrls: []string{"https://extra:2379"}})
-			_, e = ObserveManagement(t.Context(), c, request)
-			require.Error(t, e)
+func TestOwnedCAPIObservationAndBooleanActivation(t *testing.T) {
+	c, request, servers := managementTLSFixture(t, 1)
+	observation, err := ObserveManagement(t.Context(), c, request)
+	require.NoError(t, err)
+	first, err := RecordManagementObservation(t.Context(), c, c, observation)
+	require.NoError(t, err)
+	require.False(t, first.Activated)
+	_, err = ActivateManagement(t.Context(), c, c, request)
+	require.Error(t, err)
+	tcp := &unstructured.Unstructured{}
+	tcp.SetAPIVersion(request.Authority.APIVersion)
+	tcp.SetKind(request.Authority.Kind)
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: request.Authority.Namespace, Name: request.Authority.Name}, tcp))
+	tcp.Object["spec"].(map[string]any)["manage"] = true
+	require.NoError(t, c.Update(t.Context(), tcp))
+	request.Manage = true
+	activated, err := ActivateManagement(t.Context(), c, c, request)
+	require.NoError(t, err)
+	require.True(t, activated.Activated)
+	require.NoError(t, ValidateManagedMachine(t.Context(), c, request.Machines[0], request.TalosConfigs[0]))
+	servers[0].members = append(servers[0].members, &machineapi.EtcdMember{Id: 100, Hostname: "unaccounted", PeerUrls: []string{"https://extra:2380"}, ClientUrls: []string{"https://extra:2379"}})
+	_, err = ObserveManagement(t.Context(), c, request)
+	require.Error(t, err)
+}
+
+func TestNativeObservationRequiresBootIDAndKubeletWitnesses(t *testing.T) {
+	for _, witness := range []string{"boot-id", "kubelet"} {
+		t.Run(witness, func(t *testing.T) {
+			c, request, servers := managementTLSFixture(t, 1)
+			metadata := runtimeresource.NewBootID().Metadata()
+			if witness == "kubelet" {
+				metadata = k8sresource.NewKubeletStatus(k8sresource.NamespaceName, "kubelet").Metadata()
+			}
+			require.NoError(t, servers[0].resources.Destroy(t.Context(), metadata))
+			_, err := ObserveManagement(t.Context(), c, request)
+			require.Error(t, err)
 		})
 	}
 }

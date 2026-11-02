@@ -99,9 +99,9 @@ func contractVersion(ctx context.Context, reader client.Reader, group, kind stri
 func (h *Handler) plan(ctx context.Context, s *operationSnapshot, observed NodeObservation) (*op.Journal, error) {
 	m := s.machine
 	c := s.config
-	accepted, err := op.DecodeAcceptedIntent(s.output.Data[op.AcceptedIntentKey])
-	if err != nil || accepted.MachineUID != m.UID || accepted.TalosConfigUID != c.UID {
-		return nil, fmt.Errorf("operation accepted image intent provenance unavailable")
+	accepted, err := op.AcceptedImage(ctx, h.reader, m, c)
+	if err != nil {
+		return nil, err
 	}
 	image, err := op.ConfigurationImage(s.output.Data["value"], c.Spec)
 	if err != nil {
@@ -114,8 +114,8 @@ func (h *Handler) plan(ctx context.Context, s *operationSnapshot, observed NodeO
 	if m.Spec.ProviderID == "" || node.Spec.ProviderID != m.Spec.ProviderID || node.UID == "" {
 		return nil, fmt.Errorf("operation workload Node identity mismatch")
 	}
-	j := &op.Journal{Version: op.SchemaVersion, TransactionID: uuid.NewString(), Machine: objectIdentity(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: objectIdentity(bootstrapv1.GroupVersion.Group, "TalosConfig", c), Infrastructure: objectIdentity(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, s.infra), Inputs: s.resolved.Sources(), InputFreshness: bytes.Clone(s.output.Data[configinput.FreshnessKey]), Configuration: bytes.Clone(s.output.Data["value"]), Phase: op.Planned, PriorAcceptedImageIntent: accepted.Image, TargetImage: image, TargetKubernetesVersion: m.Spec.Version, Endpoint: s.endpoint, NodeName: node.Name, NodeUID: node.UID, NodeProviderID: node.Spec.ProviderID, Steps: []op.OperationStep{{Kind: op.Apply, Phase: op.StepPlanned, ApplyOutcome: op.Unknown}}}
-	if image.Reference != accepted.Image.Reference || !reflect.DeepEqual(image.Extensions, accepted.Image.Extensions) {
+	j := &op.Journal{Version: op.SchemaVersion, TransactionID: uuid.NewString(), Machine: objectIdentity(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: objectIdentity(bootstrapv1.GroupVersion.Group, "TalosConfig", c), Infrastructure: objectIdentity(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, s.infra), Inputs: s.resolved.Sources(), InputFreshness: bytes.Clone(s.output.Data[configinput.FreshnessKey]), Configuration: bytes.Clone(s.output.Data["value"]), Phase: op.Planned, PriorAcceptedImageIntent: accepted, TargetImage: image, TargetKubernetesVersion: m.Spec.Version, Endpoint: s.endpoint, NodeName: node.Name, NodeUID: node.UID, NodeProviderID: node.Spec.ProviderID, Steps: []op.OperationStep{{Kind: op.Apply, Phase: op.StepPlanned, ApplyOutcome: op.Unknown}}}
+	if image.Reference != accepted.Reference || !reflect.DeepEqual(image.Extensions, accepted.Extensions) {
 		if err := validateVersionTransition(observed.OSVersion, image.Reference, node.Status.NodeInfo.KubeletVersion, m.Spec.Version); err != nil {
 			return nil, err
 		}

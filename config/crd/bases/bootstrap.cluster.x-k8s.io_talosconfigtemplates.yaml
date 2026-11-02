@@ -248,9 +248,6 @@ spec:
             required:
             - template
             type: object
-            x-kubernetes-validations:
-            - message: management is only supported on concrete TalosConfigs
-              rule: '!has(self.template.spec.management)'
         type: object
     served: true
     storage: false
@@ -598,9 +595,6 @@ spec:
             required:
             - template
             type: object
-            x-kubernetes-validations:
-            - message: management is only supported on concrete TalosConfigs
-              rule: '!has(self.template.spec.management)'
         type: object
     served: true
     storage: true

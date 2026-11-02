@@ -833,7 +833,7 @@ type runtimeCoreFixture struct {
 	node             *corev1.Node
 	seed             *corev1.Secret
 	originalSeed     *corev1.Secret
-	accepted         *updateoperation.AcceptedIntent
+	accepted         updateoperation.ImageIdentity
 	initialInventory runtimeCoreInventory
 	initialTCSpec    bootstrapv1.TalosConfigSpec
 	factoryURL       string
@@ -1036,7 +1036,7 @@ func runtimeCoreNewFixture(t *testing.T, assets, source, binary, caph, repo stri
 	require.Equal(t, runtimeCoreOSVersion, version)
 	require.NoError(t, probe.Close())
 	require.True(t, f.external.authenticated())
-	spec := bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: runtimeCoreOSVersion, ConfigRevision: "initial", TalosEndpoint: &endpoint, ImageFactory: &bootstrapv1.ImageFactorySpec{}, Hostname: bootstrapv1.HostnameSpec{Source: bootstrapv1.HostnameSourceMachineName}}
+	spec := bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: runtimeCoreOSVersion, ConfigRevision: "initial", Manage: true, TalosEndpoint: &endpoint, ImageFactory: &bootstrapv1.ImageFactorySpec{}, Hostname: bootstrapv1.HostnameSpec{Source: bootstrapv1.HostnameSourceMachineName}}
 	template := &bootstrapv1.TalosConfigTemplate{ObjectMeta: metav1.ObjectMeta{Name: "worker-initial", Namespace: namespace}, Spec: bootstrapv1.TalosConfigTemplateSpec{Template: bootstrapv1.TalosConfigTemplateResource{Spec: spec}}}
 	require.NoError(t, c.Create(ctx, template))
 	f.initialTCSpec = spec
@@ -1069,14 +1069,9 @@ func runtimeCoreNewFixture(t *testing.T, assets, source, binary, caph, repo stri
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: f.tc.Status.DataSecretName}, f.seed))
 	f.originalSeed = f.seed.DeepCopy()
 	require.NotEmpty(t, f.seed.Data[configinput.FreshnessKey])
-	accepted, err := updateoperation.DecodeAcceptedIntent(f.seed.Data[updateoperation.AcceptedIntentKey])
-	require.NoError(t, err, "initial acceptedIntent must originate in actual provider generation, never fixture writes")
-	require.Equal(t, f.machine.UID, accepted.MachineUID)
-	require.Equal(t, f.tc.UID, accepted.TalosConfigUID)
-	require.Empty(t, accepted.TransactionID)
+	require.NotContains(t, f.seed.Data, "acceptedIntent", "standalone generation must not add ownership receipts")
 	require.True(t, metav1.IsControlledBy(f.seed, f.tc))
 	require.Equal(t, f.machine.Name+"-bootstrap-data", f.seed.Name)
-	f.accepted = accepted
 	require.NoError(t, f.external.setActive(ctx, f.seed.Data["value"]))
 	provider, err := configloader.NewFromBytes(f.seed.Data["value"])
 	require.NoError(t, err)
@@ -1121,6 +1116,13 @@ func runtimeCoreNewFixture(t *testing.T, assets, source, binary, caph, repo stri
 			return errors.New("actual NodeRef/providerID not matched")
 		}
 		return nil
+	})
+	runtimeCoreEventually(t, "actual native node auto-activates from uncached observation", 30*time.Second, func() error {
+		image, err := updateoperation.AcceptedImage(ctx, c, f.machine, f.tc)
+		if err == nil {
+			f.accepted = image
+		}
+		return err
 	})
 	f.initialInventory = runtimeCoreSnapshot(t, ctx, c, namespace)
 	require.Len(t, f.initialInventory, 5, "exactly Machine/MS/TC/Infra/Node initially")
@@ -1253,9 +1255,9 @@ func (f *runtimeCoreFixture) assertPending(t *testing.T) {
 	}
 	require.Empty(t, s.Data[updateoperation.ReceiptKey], "receipt must not exist before actual recovery")
 	require.Contains(t, f.machine.Annotations, clusterv1.UpdateInProgressAnnotation)
-	accepted, err := updateoperation.DecodeAcceptedIntent(f.seed.Data[updateoperation.AcceptedIntentKey])
+	accepted, err := updateoperation.AcceptedImage(f.ctx, f.c, f.machine, f.tc)
 	require.NoError(t, err)
-	require.Equal(t, f.accepted.Image, accepted.Image, "old accepted image intent persists through render/Issued")
+	require.Equal(t, f.accepted, accepted, "activated old image persists through render/Issued")
 }
 func (f *runtimeCoreFixture) awaitCompleted(t *testing.T) {
 	t.Helper()
@@ -1292,10 +1294,10 @@ func (f *runtimeCoreFixture) awaitCompleted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, f.machine.UID, receipt.MachineUID)
 	require.Equal(t, f.infra.GetUID(), receipt.InfrastructureUID)
-	accepted, err := updateoperation.DecodeAcceptedIntent(f.seed.Data[updateoperation.AcceptedIntentKey])
+	accepted, err := updateoperation.AcceptedImage(f.ctx, f.c, f.machine, f.tc)
 	require.NoError(t, err)
-	require.Equal(t, j.TargetImage, accepted.Image)
-	require.Equal(t, j.TransactionID, accepted.TransactionID)
+	require.Equal(t, j.TargetImage, accepted)
+	require.Equal(t, f.originalSeed.Data, f.seed.Data, "CABPT seed remains immutable")
 	f.external.mu.Lock()
 	authenticated := f.external.peerAuthenticated
 	f.external.mu.Unlock()
@@ -1409,7 +1411,7 @@ func TestRuntimeCoreChainedRegistryThenDelayedInstall(t *testing.T) {
 	_, priorJournal := f.readJournal(t)
 	firstTransaction := priorJournal.TransactionID
 	require.NoError(t, f.c.Get(f.ctx, client.ObjectKeyFromObject(f.seed), f.seed))
-	accepted, err := updateoperation.DecodeAcceptedIntent(f.seed.Data[updateoperation.AcceptedIntentKey])
+	accepted, err := updateoperation.AcceptedImage(f.ctx, f.c, f.machine, f.tc)
 	require.NoError(t, err)
 	f.accepted = accepted
 	pollsBeforeInstall := f.proxy.count()

@@ -6,7 +6,6 @@ package inplace
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
@@ -111,6 +110,8 @@ type durableFixture struct {
 	machine      *clusterv1.Machine
 	cluster      *clusterv1.Cluster
 	output       *corev1.Secret
+	seed         *corev1.Secret
+	seedSpec     bootstrapv1.TalosConfigSpec
 	workloadNode *corev1.Node
 }
 
@@ -169,28 +170,40 @@ func newDurableFixture(t *testing.T, imageChanged bool) *durableFixture {
 	require.NoError(t, err)
 	kubeSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "cluster-kubeconfig"}, Data: map[string][]byte{"value": value}}
 	management := fake.NewClientBuilder().WithScheme(scheme).WithObjects(m, cfg, cluster, infra, crd, generation, kubeSecret).Build()
+	if imageChanged {
+		cfg.Spec.StrategicPatches = []string{"apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n  image: factory.example/metal-installer/old-schematic:v1.14.0\nprovisioning:\n  diskSelector:\n    match: system_disk\n"}
+		require.NoError(t, management.Update(t.Context(), cfg))
+	}
 	resolved, err := configinput.Resolve(t.Context(), management, cfg)
 	require.NoError(t, err)
 	rendered, err := configinput.Render(resolved, configinput.RenderContext{Machine: m, Cluster: cluster})
 	require.NoError(t, err)
-	target := op.ImageIdentity{Reference: "factory.example/metal-installer/new-schematic:v1.14.0"}
-	prior := target
+	seedData, seedFreshness := rendered.Data(), rendered.Freshness()
+	seedSpec := *cfg.Spec.DeepCopy()
 	if imageChanged {
-		prior.Reference = "factory.example/metal-installer/old-schematic:v1.14.0"
-		cfg.Spec.StrategicPatches = []string{fmt.Sprintf("apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n  image: %s\nprovisioning:\n  diskSelector:\n    match: system_disk\n", target.Reference)}
+		cfg.Spec.StrategicPatches = []string{"apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n  image: factory.example/metal-installer/new-schematic:v1.14.0\nprovisioning:\n  diskSelector:\n    match: system_disk\n"}
 		require.NoError(t, management.Update(t.Context(), cfg))
 		resolved, err = configinput.Resolve(t.Context(), management, cfg)
 		require.NoError(t, err)
 		rendered, err = configinput.Render(resolved, configinput.RenderContext{Machine: m, Cluster: cluster})
 		require.NoError(t, err)
-	} else {
-		prior = op.ImageIdentity{}
 	}
-	accepted, err := op.EncodeAcceptedIntent(op.AcceptedIntent{MachineUID: m.UID, TalosConfigUID: cfg.UID, Image: prior})
-	require.NoError(t, err)
-	output := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "bootstrap", UID: "bootstrap-uid", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(cfg, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": rendered.Data(), configinput.FreshnessKey: rendered.Freshness(), op.AcceptedIntentKey: accepted}}
-	require.NoError(t, management.Create(t.Context(), output))
-	node := &durableNode{observation: NodeObservation{Configuration: rendered.Data(), BootID: "boot-old", OSVersion: "v1.14.0", KubeletImage: "registry/kubelet:v1.37.0"}, outcome: op.NoReboot}
+	seed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "bootstrap", UID: "bootstrap-uid", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(cfg, bootstrapv1.GroupVersion.WithKind("TalosConfig"))}}, Data: map[string][]byte{"value": seedData, configinput.FreshnessKey: seedFreshness}}
+	require.NoError(t, management.Create(t.Context(), seed))
+	output := seed
+	if imageChanged {
+		output = seed.DeepCopy()
+		output.Name = "desired-config"
+		output.UID = "desired-uid"
+		output.ResourceVersion = ""
+		output.Data = map[string][]byte{"value": rendered.Data(), configinput.FreshnessKey: rendered.Freshness()}
+		cfg.Status.DataSecretName = output.Name
+		require.NoError(t, management.Update(t.Context(), cfg))
+	}
+	if imageChanged {
+		require.NoError(t, management.Create(t.Context(), output))
+	}
+	node := &durableNode{observation: NodeObservation{Configuration: seedData, BootID: "ba144cb9-b310-43f2-8126-d3e7313791a6", OSVersion: "v1.14.0", KubeletImage: "registry/kubelet:v1.37.0"}, outcome: op.NoReboot}
 	handler := NewHandler(uidAssigningClient{management}, management, func(context.Context, types.NamespacedName, bootstrapv1.TalosEndpoint) (OperationNode, error) {
 		return node, nil
 	})
@@ -204,7 +217,9 @@ func newDurableFixture(t *testing.T, imageChanged bool) *durableFixture {
 		return handler.runner.ctx != nil
 	}, time.Second, time.Millisecond)
 	request := &runtimehooks.UpdateMachineRequest{Desired: runtimehooks.UpdateMachineRequestObjects{Machine: *m.DeepCopy(), BootstrapConfig: runtime.RawExtension{Object: cfg.DeepCopy()}}}
-	return &durableFixture{handler: handler, management: management, node: node, request: request, config: cfg, machine: m, cluster: cluster, output: output, workloadNode: workload}
+	fixture := &durableFixture{handler: handler, management: management, node: node, request: request, config: cfg, machine: m, cluster: cluster, output: output, seed: seed, seedSpec: seedSpec, workloadNode: workload}
+	activateDurableFixture(t, fixture)
+	return fixture
 }
 func (f *durableFixture) poll(t *testing.T) *runtimehooks.UpdateMachineResponse {
 	t.Helper()

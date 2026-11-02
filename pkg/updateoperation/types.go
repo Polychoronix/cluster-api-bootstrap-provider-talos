@@ -13,21 +13,18 @@ import (
 )
 
 const (
-	JournalKey                        = "journal"
-	ReceiptKey                        = "receipt"
-	ConsumedReceiptKey                = "consumedReceipt"
-	LastReceiptKey                    = "lastReceipt"
-	OwnerIntentKey                    = "ownerIntent"
-	OwnerIntentVersion                = "v1"
-	SchemaVersion                     = "v1"
-	OwnerIntentProvenanceValue        = "cacppt"
-	AcceptedIntentKey                 = "acceptedIntent"
-	OwnerPlanNameAnnotation           = "bootstrap.cluster.x-k8s.io/update-plan-secret"
-	OwnerPlanUIDAnnotation            = "bootstrap.cluster.x-k8s.io/update-plan-uid"
-	ProvenanceAnnotation              = "bootstrap.cluster.x-k8s.io/update-operation-created-by"
-	ProvenanceValue                   = "cabpt"
-	InitialControlPlaneNameAnnotation = "bootstrap.cluster.x-k8s.io/initial-control-plane-name"
-	InitialControlPlaneUIDAnnotation  = "bootstrap.cluster.x-k8s.io/initial-control-plane-uid"
+	JournalKey                 = "journal"
+	ReceiptKey                 = "receipt"
+	ConsumedReceiptKey         = "consumedReceipt"
+	LastReceiptKey             = "lastReceipt"
+	OwnerIntentKey             = "ownerIntent"
+	OwnerIntentVersion         = "v1"
+	SchemaVersion              = "v1"
+	OwnerIntentProvenanceValue = "cacppt"
+	OwnerPlanNameAnnotation    = "bootstrap.cluster.x-k8s.io/update-plan-secret"
+	OwnerPlanUIDAnnotation     = "bootstrap.cluster.x-k8s.io/update-plan-uid"
+	ProvenanceAnnotation       = "bootstrap.cluster.x-k8s.io/update-operation-created-by"
+	ProvenanceValue            = "cabpt"
 )
 
 type Phase string
@@ -102,12 +99,6 @@ type OperationStep struct {
 	PulledImageName   string        `json:"pulledImageName,omitempty"`
 	PulledImageDigest string        `json:"pulledImageDigest,omitempty"`
 	InstallExitCode   *int32        `json:"installExitCode,omitempty"`
-}
-type AcceptedIntent struct {
-	MachineUID     types.UID     `json:"machineUID"`
-	TalosConfigUID types.UID     `json:"talosConfigUID"`
-	Image          ImageIdentity `json:"image"`
-	TransactionID  string        `json:"transactionID,omitempty"`
 }
 type Journal struct {
 	Version                  string                       `json:"version"`

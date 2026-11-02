@@ -26,7 +26,6 @@ import (
 
 	bootstrapv1beta1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
-	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 )
 
 func (r *TalosConfigReconciler) fetchSecret(ctx context.Context, config *bootstrapv1beta1.TalosConfig, secretName string) (*corev1.Secret, error) {
@@ -201,7 +200,7 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 			dataSecretName = scope.Config.Name + "-update-data"
 		}
 	}
-	if scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" {
+	if scope.ConfigOwner.DataSecretName() != nil && !scope.ConfigOwner.IsMachinePool() {
 		dataSecretName = scope.Config.Name + "-update-data"
 	}
 
@@ -242,9 +241,6 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 		}
 		patched.Data = map[string][]byte{"value": data}
 		patched.Data[configinput.FreshnessKey] = privateFreshness
-		if accepted := existing.Data[updateoperation.AcceptedIntentKey]; len(accepted) > 0 {
-			patched.Data[updateoperation.AcceptedIntentKey] = accepted
-		}
 
 		return dataSecretName, r.Client.Patch(ctx, patched, client.MergeFrom(existing))
 	}
@@ -268,44 +264,6 @@ func (r *TalosConfigReconciler) writeBootstrapData(ctx context.Context, scope *T
 		Data: map[string][]byte{
 			"value": data,
 		},
-	}
-	initial := false
-	if !bootstrapv1beta1.IsInPlaceUpdate(scope.Config) && scope.ConfigOwner.DataSecretName() == nil && !scope.ConfigOwner.IsMachinePool() {
-		var err error
-		initial, err = r.initialBootstrapLineage(ctx, scope)
-		if err != nil {
-			return "", err
-		}
-	}
-	if initial {
-		image, err := updateoperation.ConfigurationImage(data, scope.Config.Spec)
-		if err != nil {
-			return "", err
-		}
-		intent, err := updateoperation.EncodeAcceptedIntent(updateoperation.AcceptedIntent{MachineUID: scope.ConfigOwner.GetUID(), TalosConfigUID: scope.Config.UID, Image: image})
-		if err != nil {
-			return "", err
-		}
-		certSecret.Data[updateoperation.AcceptedIntentKey] = intent
-	}
-	if !initial && scope.Config.Status.Management != nil && scope.Config.Status.Management.ActivatedRevision != "" && !scope.ConfigOwner.IsMachinePool() {
-		machine := &capiv1.Machine{}
-		if r.APIReader == nil || r.APIReader.Get(ctx, client.ObjectKey{Namespace: scope.Config.Namespace, Name: ownerName}, machine) != nil {
-			return "", fmt.Errorf("Talos management live Machine lookup failed")
-		}
-		authority, _, err := updateoperation.ManagementAuthorityForMachine(ctx, r.APIReader, machine, scope.Config)
-		if err != nil {
-			return "", err
-		}
-		accepted, err := updateoperation.ManagementAcceptedIntent(ctx, r.APIReader, authority, machine, scope.Config)
-		if err != nil {
-			return "", err
-		}
-		intent, err := updateoperation.EncodeAcceptedIntent(accepted)
-		if err != nil {
-			return "", err
-		}
-		certSecret.Data[updateoperation.AcceptedIntentKey] = intent
 	}
 	certSecret.Data[configinput.FreshnessKey] = privateFreshness
 	if scope.ConfigOwner.IsMachinePool() {

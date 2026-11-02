@@ -4,7 +4,6 @@
 package updateoperation
 
 import (
-	"encoding/json"
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"sort"
@@ -34,19 +33,6 @@ func ConfigurationImage(data []byte, spec bootstrapv1.TalosConfigSpec) (ImageIde
 	if spec.ImageFactory != nil {
 		i.Extensions = append([]string(nil), spec.ImageFactory.Extensions...)
 		sort.Strings(i.Extensions)
-	}
-	return i, nil
-}
-func EncodeAcceptedIntent(intent AcceptedIntent) ([]byte, error) {
-	if intent.MachineUID == "" || intent.TalosConfigUID == "" {
-		return nil, safe("accepted intent identity")
-	}
-	return json.Marshal(intent)
-}
-func DecodeAcceptedIntent(data []byte) (*AcceptedIntent, error) {
-	i := &AcceptedIntent{}
-	if json.Unmarshal(data, i) != nil || i.MachineUID == "" || i.TalosConfigUID == "" {
-		return nil, safe("accepted image intent unavailable")
 	}
 	return i, nil
 }

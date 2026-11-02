@@ -25,9 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -60,8 +58,8 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if err := validateManagementAuthority(ctx, reader, request.Authority); err != nil {
 		return nil, err
 	}
-	if request.Cluster == nil || request.Spec == nil || len(bootstrapv1.ValidateManagementSpec(field.NewPath("management"), request.Spec)) != 0 {
-		return nil, managementError("request")
+	if request.Cluster == nil || len(request.Machines) == 0 {
+		return nil, managementError("request inventory")
 	}
 	if request.Authority.Kind == "TalosControlPlane" && len(request.EffectiveTalosConfigs) == 0 {
 		return nil, managementError("effective TCP input required")
@@ -80,16 +78,22 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: a.Name}, authority) != nil {
 		return nil, managementError("authority read")
 	}
-	raw, found, e := unstructured.NestedMap(authority.Object, "spec", "management")
-	live := &bootstrapv1.ManagementSpec{}
-	if e != nil || !found || runtime.DefaultUnstructuredConverter.FromUnstructured(raw, live) != nil || !managementSame(live, request.Spec) {
-		return nil, managementError("live management intent")
+	live, _, e := unstructured.NestedBool(authority.Object, "spec", "manage")
+	if e != nil || live != request.Manage {
+		return nil, managementError("live management consent")
 	}
-	if len(request.Machines) != len(live.Machines) || len(request.TalosConfigs) != len(live.Machines) || (a.Kind == "TalosConfig" && len(live.Machines) != 1) {
+	if len(request.TalosConfigs) != len(request.Machines) || (a.Kind == "TalosConfig" && len(request.Machines) != 1) {
 		return nil, managementError("configured inventory")
 	}
-	// All declared members are preflighted before credentials or external RPCs.
-	for _, pin := range live.Machines {
+	pinned := make([]MachineIdentity, 0, len(request.Machines))
+	seen := make(map[types.UID]bool, len(request.Machines))
+	for _, machine := range request.Machines {
+		if machine == nil || machine.UID == "" || seen[machine.UID] {
+			return nil, managementError("unique live inventory")
+		}
+		seen[machine.UID] = true
+		pin := MachineIdentity{Name: machine.Name, UID: machine.UID}
+		pinned = append(pinned, pin)
 		m := &clusterv1.Machine{}
 		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: pin.Name}, m) != nil || m.UID != pin.UID {
 			return nil, managementError("Machine preflight")
@@ -140,8 +144,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if e != nil {
 		return nil, e
 	}
-	o := &ManagementObservation{safety: managementSafety{Authority: a, AuthoritySpec: authoritySpec, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Revision: live.InventoryRevision, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementSource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
-	pinned := append([]bootstrapv1.MachineIdentityReference(nil), live.Machines...)
+	o := &ManagementObservation{safety: managementSafety{Authority: a, AuthoritySpec: authoritySpec, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementSource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].Name < pinned[j].Name })
 	nodeIDs := map[types.UID]bool{}
 	etcdNodes := map[uint64]managementEtcdMember{}
@@ -164,8 +167,8 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			return nil, ErrManagementPaused
 		}
 		owner := metav1.GetControllerOf(m)
-		if a.Kind == "TalosConfig" && owner != nil {
-			return nil, managementError("standalone Machine controller")
+		if a.Kind == "TalosConfig" && owner != nil && owner.Kind != "MachineSet" {
+			return nil, managementError("foreign worker controller")
 		}
 		if a.Kind == "TalosControlPlane" && owner != nil && (owner.Kind != a.Kind || owner.Name != a.Name || owner.UID != a.UID || owner.APIVersion != a.APIVersion) {
 			return nil, managementError("foreign Machine controller")
@@ -209,7 +212,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 				}
 			}
 		}
-		if !expectedTC || tc.UID == "" || (a.Kind == "TalosConfig" && (tc.Name != a.Name || tc.UID != a.UID)) || (a.Kind == "TalosControlPlane" && tc.Spec.Management != nil) {
+		if !expectedTC || tc.UID == "" || (a.Kind == "TalosConfig" && (tc.Name != a.Name || tc.UID != a.UID)) {
 			return nil, managementError("bootstrap authority")
 		}
 		infra, e := managementInfrastructure(ctx, reader, m)
@@ -221,18 +224,22 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		}
 		seed := &corev1.Secret{}
 		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: *m.Spec.Bootstrap.DataSecretName}, seed) != nil || seed.UID == "" || len(seed.Data["value"]) == 0 {
-			return nil, managementError("original bootstrap seed")
+			return nil, managementError("CABPT bootstrap seed")
+		}
+		seedOwner := metav1.GetControllerOf(seed)
+		if seedOwner == nil || seedOwner.APIVersion != bootstrapv1.GroupVersion.String() || seedOwner.Kind != "TalosConfig" || seedOwner.Name != tc.Name || seedOwner.UID != tc.UID {
+			return nil, managementError("CABPT seed controller owner")
 		}
 		liveSpec := tc.Spec.DeepCopy()
-		liveSpec.Management = nil
+		liveSpec.Manage = false
 		normalized, e := managementEffectiveInput(request, authority, m, tc)
 		if e != nil {
 			return nil, e
 		}
-		normalized.Spec.Management = nil
+		normalized.Spec.Manage = false
 		normalized.Generation = 0
 		inputs, e := configinput.Resolve(ctx, reader, normalized)
-		if e != nil || !inputs.HasBaseline() {
+		if e != nil {
 			return nil, managementError("private baseline resolution")
 		}
 		if normalized.Spec.TalosEndpoint == nil {
@@ -299,13 +306,13 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			talos.Close()
 			return nil, managementError("active Talos trust identity")
 		}
-		if observed.KubeletImage != "" && managementImageTag(observed.KubeletImage) != strings.TrimPrefix(node.Status.NodeInfo.KubeletVersion, "v") {
+		if observed.KubeletImage == "" || managementImageTag(observed.KubeletImage) != strings.TrimPrefix(node.Status.NodeInfo.KubeletVersion, "v") {
 			talos.Close()
-			return nil, managementError("actual kubelet version")
+			return nil, managementError("actual kubelet witness")
 		}
-		if node.Status.NodeInfo.BootID != "" && node.Status.NodeInfo.BootID != observed.BootID {
+		if observed.BootID == "" || node.Status.NodeInfo.BootID == "" || node.Status.NodeInfo.BootID != observed.BootID {
 			talos.Close()
-			return nil, managementError("Node boot identity")
+			return nil, managementError("Node boot witness")
 		}
 		if a.Kind == "TalosControlPlane" {
 			view, self, e := managementEtcd(ctx, talos, *normalized.Spec.TalosEndpoint, m, node)
@@ -342,7 +349,11 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if e != nil {
 			return nil, managementError("InfraMachine encoding")
 		}
-		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: managementSource(seed, "value"), Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
+		var originalSeed configinput.SourceIdentity
+		if seed != nil {
+			originalSeed = managementSource(seed, "value")
+		}
+		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: originalSeed, Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
 	}
 	if a.Kind == "TalosControlPlane" {
 		for i := range o.safety.Etcd {
@@ -412,7 +423,11 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		}
 	}
 	for _, member := range o.safety.Members {
-		for _, source := range append(append([]configinput.SourceIdentity(nil), member.Sources...), member.Seed) {
+		sources := append([]configinput.SourceIdentity(nil), member.Sources...)
+		if member.Seed.Name != "" {
+			sources = append(sources, member.Seed)
+		}
+		for _, source := range sources {
 			secret := &corev1.Secret{}
 			if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !managementSame(source, managementSource(secret, source.Key)) {
 				return nil, managementError("member source changed during observation")
@@ -448,7 +463,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if managementPaused(tc) {
 			return nil, ErrManagementPaused
 		}
-		tc.Spec.Management = nil
+		tc.Spec.Manage = false
 		current, _ := json.Marshal(tc.Spec)
 		if !bytes.Equal(current, member.ConfigSpec) {
 			return nil, managementError("configuration changed during observation")
@@ -592,10 +607,7 @@ func managementAuthoritySpec(authority *unstructured.Unstructured) ([]byte, erro
 	if err != nil || !found {
 		return nil, managementError("authority spec")
 	}
-	if management, ok := spec["management"].(map[string]any); ok {
-		delete(management, "mode")
-		delete(management, "approval")
-	}
+	delete(spec, "manage")
 	encoded, err := json.Marshal(spec)
 	if err != nil {
 		return nil, managementError("authority spec encoding")

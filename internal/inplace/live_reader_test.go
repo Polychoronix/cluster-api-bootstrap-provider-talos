@@ -24,7 +24,7 @@ func (r liveConfigReader) Get(ctx context.Context, key client.ObjectKey, o clien
 	return nil
 }
 func TestRuntimeDoesNotTrustCachedDesiredConfiguration(t *testing.T) {
-	f := newUpdateFixture(t, "v1.13.0", "ghcr.io/siderolabs/installer:v1.13.0", freshHash(t), "")
+	f := newDurableFixture(t, false)
 	f.handler.reader = liveConfigReader{Reader: f.handler.client}
 	data, fresh, err := f.handler.desiredConfig(context.Background(), &f.request.Desired.Machine, f.request.Desired.BootstrapConfig)
 	require.NoError(t, err)

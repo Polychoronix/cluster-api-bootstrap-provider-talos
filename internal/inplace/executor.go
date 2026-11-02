@@ -27,6 +27,11 @@ const operationDeadline = 30 * time.Minute
 func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMachineRequest, resp *runtimehooks.UpdateMachineResponse) error {
 	s, ready, err := h.snapshot(ctx, &req.Desired.Machine, req.Desired.BootstrapConfig)
 	if err != nil {
+		if !errors.Is(err, op.ErrManagementPaused) {
+			if pendingErr := h.rejectStalePending(ctx, &req.Desired.Machine); pendingErr != nil {
+				return errors.Join(err, pendingErr)
+			}
+		}
 		return err
 	}
 	if !ready {
@@ -344,31 +349,30 @@ func (h *Handler) recovered(ctx context.Context, s *operationSnapshot, j *op.Jou
 	}
 	return nil
 }
-func (h *Handler) acceptIntent(ctx context.Context, s *operationSnapshot, j *op.Journal) error {
+func (h *Handler) acceptObservedImage(ctx context.Context, s *operationSnapshot, j *op.Journal) error {
 	output := &corev1.Secret{}
 	if h.reader.Get(ctx, client.ObjectKeyFromObject(s.output), output) != nil || output.UID != s.output.UID {
-		return fmt.Errorf("accepted intent output replaced")
+		return fmt.Errorf("accepted image output replaced")
 	}
 	if !bytes.Equal(output.Data["value"], j.Configuration) || !bytes.Equal(output.Data[configinput.FreshnessKey], j.InputFreshness) {
-		return fmt.Errorf("accepted intent output does not match frozen operation")
+		return fmt.Errorf("accepted image output does not match frozen operation")
 	}
-	value, err := op.EncodeAcceptedIntent(op.AcceptedIntent{MachineUID: j.Machine.UID, TalosConfigUID: j.TalosConfig.UID, Image: j.TargetImage, TransactionID: j.TransactionID})
-	if err != nil {
-		return err
+	if len(j.Steps) == 0 {
+		return fmt.Errorf("accepted image requires observed operation")
 	}
-	next := map[string][]byte{}
-	for k, v := range output.Data {
-		next[k] = v
+	for _, step := range j.Steps {
+		if step.Phase != op.StepObserved {
+			return fmt.Errorf("accepted image requires observed operation")
+		}
 	}
-	next[op.AcceptedIntentKey] = value
-	return op.PatchData(ctx, h.client, output, next)
+	return op.RecordAcceptedImage(ctx, h.client, h.reader, s.machine, s.config, j.TargetImage)
 }
 
 func (h *Handler) finalizeObserved(ctx context.Context, s *operationSnapshot, secret *corev1.Secret, j *op.Journal) error {
 	if err := h.guardIssued(ctx, s.machine.Namespace, j); err != nil {
 		return h.ambiguous(ctx, secret, j, err)
 	}
-	if err := h.acceptIntent(ctx, s, j); err != nil {
+	if err := h.acceptObservedImage(ctx, s, j); err != nil {
 		return err
 	}
 	if err := h.guardIssued(ctx, s.machine.Namespace, j); err != nil {

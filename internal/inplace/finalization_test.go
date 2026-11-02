@@ -33,7 +33,7 @@ func TestAcknowledgedSourceRotationStopsBeforeReceipt(t *testing.T) {
 	defer f.node.mu.Unlock()
 	require.Equal(t, 1, f.node.applyCount)
 }
-func TestAcceptedIntentRejectsSameUIDRewrittenOutput(t *testing.T) {
+func TestActivationRejectsSameUIDRewrittenSeed(t *testing.T) {
 	f := newDurableFixture(t, false)
 	f.poll(t)
 	_, j := f.journal(t)
@@ -41,17 +41,22 @@ func TestAcceptedIntentRejectsSameUIDRewrittenOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready)
 	output := &corev1.Secret{}
-	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.output), output))
-	before := append([]byte(nil), output.Data[op.AcceptedIntentKey]...)
+	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.seed), output))
+	before, err := op.AcceptedImage(t.Context(), f.management, f.machine, f.config)
+	require.NoError(t, err)
 	output.Data["value"] = []byte("changed-private-data")
 	output.Data[configinput.FreshnessKey] = []byte("new-request")
 	require.NoError(t, f.management.Update(t.Context(), output))
-	require.Error(t, f.handler.acceptIntent(t.Context(), s, j))
+	require.Error(t, f.handler.acceptObservedImage(t.Context(), s, j))
 	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(output), output))
-	require.Equal(t, before, output.Data[op.AcceptedIntentKey])
+	after, err := op.AcceptedImage(t.Context(), f.management, f.machine, f.config)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
 }
 func TestInitialAndConsumedNextRequestWaitWithoutAmbiguity(t *testing.T) {
-	initial := newUpdateFixture(t, "v1.14.0", "installer:v1.14.0", "stale-hash", "")
+	initial := newDurableFixture(t, false)
+	initial.output.Data[configinput.FreshnessKey] = []byte("stale-request")
+	require.NoError(t, initial.management.Update(t.Context(), initial.output))
 	response := &runtimehooks.UpdateMachineResponse{}
 	initial.handler.DoUpdateMachine(t.Context(), initial.request, response)
 	require.Equal(t, runtimehooks.ResponseStatusSuccess, response.Status)

@@ -86,21 +86,21 @@ func TestAcknowledgedRecoveryDeadlineStopsWithoutAnotherApply(t *testing.T) {
 	require.Zero(t, f.node.applyCount)
 }
 
-type acceptedIntentFaultClient struct {
+type activationImageFaultClient struct {
 	client.Client
 	failed bool
 }
 
-func (c *acceptedIntentFaultClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-	if !c.failed && obj.GetName() == "bootstrap" {
+func (c *activationImageFaultClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if !c.failed && obj.GetName() == "config-management" {
 		c.failed = true
-		return errors.New("accepted-intent-CAS-loss")
+		return errors.New("activation-image-CAS-loss")
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
-func TestAcceptedIntentFailureDoesNotPublishReceiptOrReissue(t *testing.T) {
+func TestActivatedImageFailureDoesNotPublishReceiptOrReissue(t *testing.T) {
 	f := newDurableFixture(t, false)
-	fault := &acceptedIntentFaultClient{Client: f.handler.client}
+	fault := &activationImageFaultClient{Client: f.handler.client}
 	f.handler.client = fault
 	require.Eventually(t, func() bool {
 		response := &runtimehooks.UpdateMachineResponse{}
@@ -111,10 +111,8 @@ func TestAcceptedIntentFailureDoesNotPublishReceiptOrReissue(t *testing.T) {
 	require.Equal(t, op.Planned, j.Phase)
 	require.Empty(t, secret.Data[op.ReceiptKey])
 	output := &corev1.Secret{}
-	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.output), output))
-	intent, err := op.DecodeAcceptedIntent(output.Data[op.AcceptedIntentKey])
-	require.NoError(t, err)
-	require.Empty(t, intent.TransactionID)
+	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.seed), output))
+	require.Equal(t, f.seed.Data, output.Data, "CABPT original seed is never an operation receipt")
 	require.Eventually(t, func() bool { return f.poll(t).RetryAfterSeconds == 0 }, 5*time.Second, time.Millisecond)
 	f.node.mu.Lock()
 	defer f.node.mu.Unlock()

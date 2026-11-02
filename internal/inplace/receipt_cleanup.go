@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"reflect"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
@@ -67,13 +68,9 @@ func (h *Handler) consumeMachineReceipt(ctx context.Context, m *clusterv1.Machin
 	if _, updating := infra.GetAnnotations()[clusterv1.UpdateInProgressAnnotation]; updating {
 		return fmt.Errorf("receipt cleanup infrastructure handshake incomplete")
 	}
-	output := &corev1.Secret{}
-	if h.reader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: config.Status.DataSecretName}, output) != nil {
-		return fmt.Errorf("receipt cleanup accepted intent unavailable")
-	}
-	accepted, err := op.DecodeAcceptedIntent(output.Data[op.AcceptedIntentKey])
-	if err != nil || accepted.TransactionID != j.TransactionID || accepted.MachineUID != m.UID || accepted.TalosConfigUID != config.UID {
-		return fmt.Errorf("receipt cleanup accepted intent not durable")
+	accepted, err := op.AcceptedImage(ctx, h.reader, m, config)
+	if err != nil || !reflect.DeepEqual(accepted, j.TargetImage) {
+		return fmt.Errorf("receipt cleanup activated image not durable")
 	}
 	return op.ConsumeReceipt(ctx, h.client, secret, j)
 }

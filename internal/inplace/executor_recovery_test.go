@@ -98,7 +98,7 @@ func (c *failReceiptClient) Patch(ctx context.Context, obj client.Object, patch 
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
-func TestReceiptFailureAfterAcceptedIntentDoesNotReissueOperations(t *testing.T) {
+func TestReceiptFailureAfterActivatedImageDoesNotReissueOperations(t *testing.T) {
 	f := newDurableFixture(t, false)
 	fault := &failReceiptClient{Client: f.handler.client}
 	f.handler.client = fault
@@ -108,10 +108,10 @@ func TestReceiptFailureAfterAcceptedIntentDoesNotReissueOperations(t *testing.T)
 		return fault.failed
 	}, 5*time.Second, time.Millisecond)
 	output := &corev1.Secret{}
-	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.output), output))
-	intent, err := op.DecodeAcceptedIntent(output.Data[op.AcceptedIntentKey])
+	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.seed), output))
+	_, err := op.AcceptedImage(t.Context(), f.management, f.machine, f.config)
 	require.NoError(t, err)
-	require.NotEmpty(t, intent.TransactionID)
+	require.Equal(t, f.seed.Data, output.Data)
 	secret, j := f.journal(t)
 	require.Empty(t, secret.Data[op.ReceiptKey])
 	require.Equal(t, op.Planned, j.Phase)
@@ -130,12 +130,11 @@ func TestRecreatedSameNameNodeNeverCompletes(t *testing.T) {
 	_, j := f.journal(t)
 	require.Equal(t, op.Ambiguous, j.Phase)
 }
-func TestAdoptedOutputWithoutAcceptedIntentStopsBeforeApply(t *testing.T) {
+func TestCAPISeedWithoutActivationStopsBeforeApply(t *testing.T) {
 	f := newDurableFixture(t, false)
-	output := &corev1.Secret{}
-	require.NoError(t, f.management.Get(t.Context(), client.ObjectKeyFromObject(f.output), output))
-	delete(output.Data, op.AcceptedIntentKey)
-	require.NoError(t, f.management.Update(t.Context(), output))
+	activation := &corev1.Secret{}
+	require.NoError(t, f.management.Get(t.Context(), client.ObjectKey{Namespace: f.config.Namespace, Name: f.config.Name + "-management"}, activation))
+	require.NoError(t, f.management.Delete(t.Context(), activation))
 	response := &runtimehooks.UpdateMachineResponse{}
 	f.handler.DoUpdateMachine(t.Context(), f.request, response)
 	require.Equal(t, runtimehooks.ResponseStatusFailure, response.Status)

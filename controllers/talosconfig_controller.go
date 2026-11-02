@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/siderolabs/talos/pkg/machinery/config"
@@ -307,7 +306,7 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Reconcile status for machines that already have a secret reference, but our status isn't up to date.
 	// This case solves the pivoting scenario (or a backup restore) which doesn't preserve the status subresource on objects.
-	if owner.DataSecretName() != nil && (config.Status.Management == nil || config.Status.Management.ActivatedRevision == "") && (!ptr.Deref(config.Status.Initialization.DataSecretCreated, false) || config.Status.DataSecretName == "") {
+	if owner.DataSecretName() != nil && (!ptr.Deref(config.Status.Initialization.DataSecretCreated, false) || config.Status.DataSecretName == "") {
 		config.Status.Initialization.DataSecretCreated = ptr.To(true)
 		config.Status.DataSecretName = *owner.DataSecretName()
 
@@ -321,10 +320,6 @@ func (r *TalosConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err = r.reconcileGenerate(ctx, tcScope); err != nil {
-		if errors.Is(err, errInitialBootstrapLineagePending) {
-			conditions.Set(config, metav1.Condition{Type: bootstrapv1beta1.DataSecretAvailableCondition, Status: metav1.ConditionFalse, Reason: bootstrapv1beta1.DataSecretNotAvailableReason, Message: errInitialBootstrapLineagePending.Error(), ObservedGeneration: config.Generation})
-			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
-		}
 		markDataSecretGenerationFailed(config, err)
 
 		return ctrl.Result{}, err
@@ -388,7 +383,7 @@ func (r *TalosConfigReconciler) reconcileGenerate(ctx context.Context, scope *Ta
 	if err != nil {
 		return err
 	}
-	if inputs.HasBaseline() && (scope.Config.Status.Management == nil || scope.Config.Status.Management.ActivatedRevision == "") {
+	if inputs.HasBaseline() {
 		if err := r.reconcileBaselineIdentity(ctx, scope, rendered.Data()); err != nil {
 			return err
 		}

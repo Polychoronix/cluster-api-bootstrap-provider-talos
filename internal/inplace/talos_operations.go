@@ -28,8 +28,7 @@ func (t *talosNodeClient) Observe(ctx context.Context) (NodeObservation, error) 
 	if err != nil {
 		return NodeObservation{}, err
 	}
-	// Requested in-place completion requires the actual kubelet image. Read-only
-	// adoption may observe older capabilities without inventing this evidence.
+	// Actual kubelet-image evidence is mandatory for configuration recovery.
 	if actual.KubeletImage == "" {
 		return NodeObservation{}, errors.New("Talos kubelet runtime observation failed")
 	}

@@ -22,7 +22,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,7 +52,7 @@ type ManagementAuthority struct {
 type ManagementObservationRequest struct {
 	Authority    ManagementAuthority
 	Cluster      *clusterv1.Cluster
-	Spec         *bootstrapv1.ManagementSpec
+	Manage       bool
 	Machines     []*clusterv1.Machine
 	TalosConfigs []*bootstrapv1.TalosConfig
 	// EffectiveTalosConfigs is the canonical shared+per-Machine input policy.
@@ -63,7 +62,7 @@ type ManagementObservationRequest struct {
 }
 
 type ManagementObservationSummary struct {
-	Observation       bootstrapv1.ObservationStatus
+	Observation       ActivationStatus
 	InventoryVerified bool
 	MachinesReady     bool
 	EtcdHealthy       bool
@@ -100,7 +99,6 @@ type managementSafety struct {
 	ClusterUID    types.UID                    `json:"clusterUID"`
 	ClusterName   string                       `json:"clusterName"`
 	ClusterInputs json.RawMessage              `json:"clusterInputs"`
-	Revision      string                       `json:"revision"`
 	Inputs        []configinput.SourceIdentity `json:"inputs"`
 	Members       []managementMember           `json:"members"`
 	Etcd          []managementEtcdMember       `json:"etcd,omitempty"`
@@ -137,16 +135,15 @@ func (*ManagementObservation) MarshalJSON() ([]byte, error) {
 }
 
 type managementRecord struct {
-	Version        string                       `json:"version"`
-	Authority      ManagementAuthority          `json:"authority"`
-	Revision       string                       `json:"revision"`
-	ObservationID  string                       `json:"observationID"`
-	ObservedAt     metav1.Time                  `json:"observedAt"`
-	SnapshotName   string                       `json:"snapshotName"`
-	SnapshotUID    types.UID                    `json:"snapshotUID"`
-	SnapshotDigest [32]byte                     `json:"snapshotDigest"`
-	Activated      bool                         `json:"activated"`
-	Associations   []managementAssociationState `json:"associations,omitempty"`
+	Version        string                      `json:"version"`
+	Authority      ManagementAuthority         `json:"authority"`
+	ObservationID  string                      `json:"observationID"`
+	ObservedAt     metav1.Time                 `json:"observedAt"`
+	SnapshotName   string                      `json:"snapshotName"`
+	SnapshotUID    types.UID                   `json:"snapshotUID"`
+	SnapshotDigest [32]byte                    `json:"snapshotDigest"`
+	Activated      bool                        `json:"activated"`
+	AcceptedImages map[types.UID]ImageIdentity `json:"acceptedImages,omitempty"`
 }
 
 func managementError(stage string) error          { return fmt.Errorf("Talos management %s failed", stage) }
@@ -166,12 +163,8 @@ func managementSecret(a ManagementAuthority, name string, data map[string][]byte
 	controller := true
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: a.Namespace, Name: name, Annotations: map[string]string{ProvenanceAnnotation: managementProvenance}, OwnerReferences: []metav1.OwnerReference{{APIVersion: a.APIVersion, Kind: a.Kind, Name: a.Name, UID: a.UID, Controller: &controller}}}, Data: data}
 }
-func managementStatus(r *managementRecord) *bootstrapv1.ManagementStatus {
-	s := &bootstrapv1.ManagementStatus{Observation: &bootstrapv1.ObservationStatus{Revision: r.Revision, ID: r.ObservationID, ObservedAt: r.ObservedAt}}
-	if r.Activated {
-		s.ActivatedRevision = r.Revision
-	}
-	return s
+func managementStatus(r *managementRecord) *ActivationStatus {
+	return &ActivationStatus{ID: r.ObservationID, ObservedAt: r.ObservedAt, Activated: r.Activated}
 }
 func readManagement(ctx context.Context, reader client.Reader, a ManagementAuthority) (*corev1.Secret, *managementRecord, []byte, error) {
 	s := &corev1.Secret{}
@@ -182,7 +175,7 @@ func readManagement(ctx context.Context, reader client.Reader, a ManagementAutho
 		return nil, nil, nil, managementError("record lookup")
 	}
 	r := &managementRecord{}
-	if !managementOwned(s, a) || json.Unmarshal(s.Data[managementRecordKey], r) != nil || r.Version != "v1" || r.Authority != a || r.ObservationID == "" || r.Revision == "" || r.SnapshotUID == "" {
+	if !managementOwned(s, a) || json.Unmarshal(s.Data[managementRecordKey], r) != nil || r.Version != "v2" || r.Authority != a || r.ObservationID == "" || r.SnapshotUID == "" {
 		return nil, nil, nil, managementError("record provenance")
 	}
 	r.ObservedAt.Time = r.ObservedAt.Time.UTC()
@@ -196,7 +189,7 @@ func readManagement(ctx context.Context, reader client.Reader, a ManagementAutho
 // RecordManagementObservation writes only authority-owned private records.
 // Equal safety content reuses its opaque ID; changed unapproved content gets a
 // new immutable snapshot. A lost/replaced approved snapshot is never recreated.
-func RecordManagementObservation(ctx context.Context, c client.Client, reader client.Reader, o *ManagementObservation) (*bootstrapv1.ManagementStatus, error) {
+func RecordManagementObservation(ctx context.Context, c client.Client, reader client.Reader, o *ManagementObservation) (*ActivationStatus, error) {
 	if o == nil || !o.summary.InventoryVerified {
 		return nil, managementError("verified observation required")
 	}
@@ -211,26 +204,12 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	if errors.Is(err, ErrNotFound) {
-		authority := &unstructured.Unstructured{}
-		authority.SetAPIVersion(o.safety.Authority.APIVersion)
-		authority.SetKind(o.safety.Authority.Kind)
-		if reader.Get(ctx, client.ObjectKey{Namespace: o.safety.Authority.Namespace, Name: o.safety.Authority.Name}, authority) != nil {
-			return nil, managementError("authority record lookup")
-		}
-		if _, found, _ := unstructured.NestedMap(authority.Object, "spec", "management", "approval"); found {
-			return nil, managementError("approved record missing")
-		}
-		if revision, _, _ := unstructured.NestedString(authority.Object, "status", "management", "activatedRevision"); revision != "" {
-			return nil, managementError("activated record missing")
-		}
-	}
 	if err == nil && bytes.Equal(previous, payload) {
-		o.summary.Observation = *managementStatus(r).Observation
+		o.summary.Observation = *managementStatus(r)
 		return managementStatus(r), nil
 	}
-	if err == nil && (r.Activated || len(r.Associations) != 0) {
-		return nil, managementError("approved safety snapshot changed")
+	if err == nil && r.Activated {
+		return nil, managementError("activated safety snapshot changed")
 	}
 	id := uuid.NewString()
 	immutable := true
@@ -239,7 +218,7 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 	if c.Create(ctx, snapshot) != nil {
 		return nil, managementError("snapshot create")
 	}
-	next := &managementRecord{Version: "v1", Authority: o.safety.Authority, Revision: o.safety.Revision, ObservationID: id, ObservedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second)), SnapshotName: snapshot.Name, SnapshotUID: snapshot.UID, SnapshotDigest: sha256.Sum256(payload)}
+	next := &managementRecord{Version: "v2", Authority: o.safety.Authority, ObservationID: id, ObservedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second)), SnapshotName: snapshot.Name, SnapshotUID: snapshot.UID, SnapshotDigest: sha256.Sum256(payload)}
 	encoded, e := json.Marshal(next)
 	if e != nil {
 		return nil, managementError("record encoding")
@@ -252,50 +231,57 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 	} else if PatchData(ctx, c, s, map[string][]byte{managementRecordKey: encoded}) != nil {
 		return nil, managementError("record CAS")
 	}
-	o.summary.Observation = *managementStatus(next).Observation
+	o.summary.Observation = *managementStatus(next)
 	return managementStatus(next), nil
 }
 
-// ActivateManagement obtains a new uncached observation immediately before
-// consuming the manifest approval. Approval, mode and generation are not safety
-// content, so approving unchanged inputs does not change the observation ID.
-func ActivateManagement(ctx context.Context, c client.Client, reader client.Reader, request ManagementObservationRequest) (*bootstrapv1.ManagementStatus, error) {
-	if request.Spec == nil || request.Spec.Mode != bootstrapv1.ManagementModeManaged || request.Spec.Approval == nil {
-		return nil, managementError("manifest approval required")
+// ActivateManagement consumes current uncached observation and live boolean consent.
+func ActivateManagement(ctx context.Context, c client.Client, reader client.Reader, request ManagementObservationRequest) (*ActivationStatus, error) {
+	if !request.Manage {
+		return nil, managementError("management consent required")
 	}
-	o, err := ObserveManagement(ctx, reader, request)
+	observation, err := ObserveManagement(ctx, reader, request)
 	if err != nil {
 		return nil, err
 	}
-	s, r, payload, err := readManagement(ctx, reader, request.Authority)
+	if _, err = RecordManagementObservation(ctx, c, reader, observation); err != nil {
+		return nil, err
+	}
+	secret, record, payload, err := readManagement(ctx, reader, request.Authority)
 	if err != nil {
 		return nil, err
 	}
-	if request.Authority.Kind == "TalosControlPlane" || len(r.Associations) != 0 {
-		return nil, managementError("aggregate ownership association required")
+	current, err := json.Marshal(observation.safety)
+	if err != nil || !bytes.Equal(payload, current) {
+		return nil, managementError("observation changed before activation")
 	}
-	current, e := json.Marshal(o.safety)
-	if e != nil || !bytes.Equal(payload, current) || request.Spec.InventoryRevision != r.Revision || request.Spec.Approval.Revision != r.Revision || request.Spec.Approval.ObservationID != r.ObservationID {
-		return nil, managementError("approval does not match current observation")
-	}
-	if !r.Activated {
-		r.Activated = true
-		data, e := json.Marshal(r)
-		if e != nil || PatchData(ctx, c, s, map[string][]byte{managementRecordKey: data}) != nil {
+	if !record.Activated {
+		record.AcceptedImages = make(map[types.UID]ImageIdentity, len(observation.safety.Members))
+		for _, member := range observation.safety.Members {
+			var original bootstrapv1.TalosConfigSpec
+			if json.Unmarshal(member.EffectiveSpec, &original) != nil {
+				return nil, managementError("observed configuration intent")
+			}
+			image, err := ConfigurationImage(member.Runtime.Configuration, original)
+			if err != nil {
+				return nil, err
+			}
+			record.AcceptedImages[member.Machine.UID] = image
+		}
+		record.Activated = true
+		encoded, err := json.Marshal(record)
+		if err != nil || PatchData(ctx, c, secret, map[string][]byte{managementRecordKey: encoded}) != nil {
 			return nil, managementError("activation CAS")
 		}
 	}
-	return managementStatus(r), nil
+	return managementStatus(record), nil
 }
 
 // ValidateManagementActivation checks the exact live authority and immutable
 // activation record before a consumer issues a new action. It never writes.
-func ValidateManagementActivation(ctx context.Context, reader client.Reader, a ManagementAuthority, spec *bootstrapv1.ManagementSpec) error {
+func ValidateManagementActivation(ctx context.Context, reader client.Reader, a ManagementAuthority, manage bool) error {
 	if err := validateManagementAuthority(ctx, reader, a); err != nil {
 		return err
-	}
-	if spec == nil || spec.Mode != bootstrapv1.ManagementModeManaged || spec.Approval == nil {
-		return managementError("management is not activated")
 	}
 	authority := &unstructured.Unstructured{}
 	authority.SetAPIVersion(a.APIVersion)
@@ -303,40 +289,20 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: a.Name}, authority) != nil {
 		return managementError("activation authority lookup")
 	}
-	raw, found, err := unstructured.NestedMap(authority.Object, "spec", "management")
-	live := &bootstrapv1.ManagementSpec{}
-	if err != nil || !found || runtime.DefaultUnstructuredConverter.FromUnstructured(raw, live) != nil || !managementSame(live, spec) {
-		return managementError("activation live manifest changed")
+	live, _, err := unstructured.NestedBool(authority.Object, "spec", "manage")
+	if err != nil || !manage || !live {
+		return managementError("management consent absent")
 	}
 	_, r, payload, err := readManagement(ctx, reader, a)
 	if err != nil {
 		return err
 	}
-	if !r.Activated || r.Revision != spec.InventoryRevision || spec.Approval.Revision != r.Revision || spec.Approval.ObservationID != r.ObservationID {
-		return managementError("activation identity")
-	}
-	for _, association := range r.Associations {
-		if !association.Completed {
-			return managementError("ownership association pending")
-		}
+	if !r.Activated {
+		return managementError("activation required")
 	}
 	safety := &managementSafety{}
 	if json.Unmarshal(payload, safety) != nil {
 		return managementError("activation snapshot decode")
-	}
-	if len(spec.Machines) != len(safety.Members) {
-		return managementError("activated inventory declaration changed")
-	}
-	for _, pin := range spec.Machines {
-		matched := false
-		for _, member := range safety.Members {
-			if pin.Name == member.Machine.Name && pin.UID == member.Machine.UID {
-				matched = true
-			}
-		}
-		if !matched {
-			return managementError("activated inventory declaration changed")
-		}
 	}
 	cluster := &clusterv1.Cluster{}
 	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: safety.ClusterName}, cluster) != nil || cluster.UID != safety.ClusterUID {
@@ -358,7 +324,11 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 }
 
 func managementSource(s *corev1.Secret, key string) configinput.SourceIdentity {
-	return configinput.SourceIdentity{Name: s.Name, Key: key, UID: s.UID, ResourceVersion: s.ResourceVersion, Digest: sha256.Sum256(s.Data[key])}
+	data := s.Data[key]
+	if key == "" {
+		data, _ = json.Marshal(s.Data)
+	}
+	return configinput.SourceIdentity{Name: s.Name, Key: key, UID: s.UID, ResourceVersion: s.ResourceVersion, Digest: sha256.Sum256(data)}
 }
 func managementObject(group, kind string, o client.Object) ObjectIdentity {
 	return ObjectIdentity{APIGroup: group, Kind: kind, Name: o.GetName(), UID: o.GetUID(), OwnerReferences: append([]metav1.OwnerReference(nil), o.GetOwnerReferences()...)}
