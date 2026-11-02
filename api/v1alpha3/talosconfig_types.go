@@ -45,6 +45,7 @@ type TalosConfigSpec struct {
 	TalosEndpoint *TalosEndpoint `json:"talosEndpoint,omitempty"`
 	// Manage consents to activation after exact live observation; false is read-only.
 	// +optional
+	// +kubebuilder:default=false
 	Manage bool `json:"manage,omitempty"`
 	// Important: Run "make" to regenerate code after modifying this file
 }

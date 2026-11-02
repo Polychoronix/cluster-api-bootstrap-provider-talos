@@ -170,6 +170,7 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               manage:
+                default: false
                 description: Manage consents to activation after exact live observation;
                   false is read-only.
                 type: boolean
@@ -611,6 +612,7 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               manage:
+                default: false
                 description: Manage consents to activation after exact live observation;
                   false is read-only.
                 type: boolean

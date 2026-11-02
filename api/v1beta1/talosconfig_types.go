@@ -55,6 +55,7 @@ type TalosConfigSpec struct {
 
 	// Manage consents to activation after exact live observation; false is read-only.
 	// +optional
+	// +kubebuilder:default=false
 	Manage bool `json:"manage,omitempty"`
 
 	// RFC6902 JSON patches to apply to machine configuration.
