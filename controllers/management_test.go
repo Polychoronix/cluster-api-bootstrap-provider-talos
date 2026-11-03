@@ -45,3 +45,42 @@ func TestStandaloneBootstrapThenObservationDoesNotRequireSeedReceipt(t *testing.
 	after := f.secret(t, seed.Name)
 	require.Equal(t, seed.Data, after.Data)
 }
+
+// An observation that cannot complete must say which stage stopped it: the condition
+// message carries the fixed stage name and the reason stays ObservationPending for
+// precondition/transport failures.
+func TestObservationFailureSurfacesStage(t *testing.T) {
+	f := newImageFactoryFixture(t, bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.14", Manage: true}, nil)
+	machine := &clusterv1.Machine{}
+	require.NoError(t, f.client.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "machine-1"}, machine))
+	machine.Spec.Bootstrap.ConfigRef = clusterv1.ContractVersionedObjectReference{APIGroup: bootstrapv1.GroupVersion.Group, Kind: "TalosConfig", Name: "machine-1"}
+	require.NoError(t, f.client.Update(context.Background(), machine))
+	cfg := f.config(t)
+	cfg.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(machine, clusterv1.GroupVersion.WithKind("Machine"))}
+	require.NoError(t, f.client.Update(context.Background(), cfg))
+	require.NoError(t, f.reconcile(t))
+	cfg = f.config(t)
+	require.True(t, ptr.Deref(cfg.Status.Initialization.DataSecretCreated, false))
+
+	// A Machine that already has a Node makes the controller observe instead of bootstrap;
+	// the fixture has no workload kubeconfig, so observation stops at a precondition.
+	require.NoError(t, f.client.Get(context.Background(), client.ObjectKeyFromObject(machine), machine))
+	machine.Spec.Bootstrap.DataSecretName = ptr.To(cfg.Status.DataSecretName)
+	machine.Spec.ProviderID = "hcloud://bm-1"
+	machine.Status.NodeRef = clusterv1.MachineNodeReference{Name: "machine-1"}
+	require.NoError(t, f.client.Update(context.Background(), machine))
+
+	_, err := f.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cfg)})
+	require.NoError(t, err)
+	cfg = f.config(t)
+	var activation *metav1.Condition
+	for i := range cfg.Status.Conditions {
+		if cfg.Status.Conditions[i].Type == bootstrapv1.ActivationReadyCondition {
+			activation = &cfg.Status.Conditions[i]
+		}
+	}
+	require.NotNil(t, activation)
+	require.Equal(t, metav1.ConditionFalse, activation.Status)
+	require.Equal(t, "ObservationPending", activation.Reason)
+	require.Regexp(t, `^Talos management .+ failed$`, activation.Message)
+}

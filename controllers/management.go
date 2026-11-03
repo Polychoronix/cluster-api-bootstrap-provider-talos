@@ -78,7 +78,11 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	request := op.ManagementObservationRequest{Authority: authority, Cluster: cluster, Manage: manage, Machines: []*clusterv1.Machine{m}, TalosConfigs: []*bootstrapv1.TalosConfig{tc}}
 	observation, err := op.ObserveManagement(ctx, r.APIReader, request)
 	if err != nil {
-		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ObservationPending")
+		reason := "ObservationPending"
+		if op.IsBaselineMismatch(err) {
+			reason = "BaselineMismatch"
+		}
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, reason, err)
 	}
 	if _, err = op.RecordManagementObservation(ctx, r.Client, r.APIReader, observation); err != nil {
 		return true, ctrl.Result{}, err
@@ -113,5 +117,25 @@ func (r *TalosConfigReconciler) activationStatus(ctx context.Context, tc *bootst
 		status = metav1.ConditionTrue
 	}
 	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: status, Reason: reason, ObservedGeneration: tc.Generation})
+	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
+}
+
+// activationFailure publishes why an observation did not complete. Stage errors carry only
+// fixed stage names (pkg/updateoperation.StageError), so the message exposes no private
+// input, configuration bytes or transport detail. The log line is emitted once per distinct
+// message per object; the 2s requeue would otherwise repeat it indefinitely.
+func (r *TalosConfigReconciler) activationFailure(ctx context.Context, tc *bootstrapv1.TalosConfig, reason string, cause error) error {
+	message := cause.Error()
+	if len(message) > 256 {
+		message = message[:256]
+	}
+	if previous := conditions.Get(tc, bootstrapv1.ActivationReadyCondition); previous == nil || previous.Message != message || previous.Reason != reason {
+		r.Log.Info("Talos observation not complete", "talosconfig", client.ObjectKeyFromObject(tc).String(), "reason", reason, "stage", message)
+	}
+	helper, err := patch.NewHelper(tc, r.Client)
+	if err != nil {
+		return err
+	}
+	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: metav1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: tc.Generation})
 	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
 }

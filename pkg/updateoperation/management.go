@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -146,7 +145,33 @@ type managementRecord struct {
 	AcceptedImages map[types.UID]ImageIdentity `json:"acceptedImages,omitempty"`
 }
 
-func managementError(stage string) error          { return fmt.Errorf("Talos management %s failed", stage) }
+// StageError reports which fixed observation/activation stage failed. Stage names are
+// constant strings chosen in this package; they never embed Secret data, configuration
+// bytes or transport error text, so the message is safe to publish on conditions.
+type StageError struct{ Stage string }
+
+func (e *StageError) Error() string { return "Talos management " + e.Stage + " failed" }
+
+// baselineMismatchStages are the comparisons that only fail after the node was reached:
+// the dial worked, but what runs there does not match the requested inputs or identity.
+var baselineMismatchStages = map[string]bool{
+	"active configuration differs from baseline": true,
+	"active Talos trust identity":                true,
+	"actual kubelet witness":                     true,
+	"Node boot witness":                          true,
+	"actual role":                                true,
+	"requested configuration differs from live":  true,
+	"Machine actual Kubernetes version differs":  true,
+}
+
+// IsBaselineMismatch reports whether err is a post-observation comparison failure rather
+// than a precondition, lookup or transport failure.
+func IsBaselineMismatch(err error) bool {
+	var stage *StageError
+	return errors.As(err, &stage) && baselineMismatchStages[stage.Stage]
+}
+
+func managementError(stage string) error          { return &StageError{Stage: stage} }
 func managementName(a ManagementAuthority) string { return a.Name + "-management" }
 func managementOwned(s *corev1.Secret, a ManagementAuthority) bool {
 	if s.Namespace != a.Namespace || s.Annotations[ProvenanceAnnotation] != managementProvenance {

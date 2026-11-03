@@ -1,3 +1,13 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.5
+
+- Observation failures are diagnosable: `ActivationReady=False` now carries the
+  fixed stage name (`Talos management <stage> failed`) as its message and the
+  controller logs `Talos observation not complete` (keys `talosconfig`, `reason`,
+  `stage`) once per distinct failure. Post-dial comparison failures (active
+  configuration, trust identity, kubelet/boot witnesses, role, version) use reason
+  `BaselineMismatch`; precondition, lookup and transport failures keep
+  `ObservationPending`. Stage names are constants and never embed private data.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.4
 
 - Admission webhook: `TalosConfig.spec` fields that only name private inputs,

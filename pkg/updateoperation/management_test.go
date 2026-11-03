@@ -104,3 +104,21 @@ func TestNativeGenerationSourceMatchesResolverIdentity(t *testing.T) {
 	secret.Data["extra"] = []byte("rotated-generation-source")
 	require.NotEqual(t, original.Digest, managementSource(secret, "").Digest, "whole generation Secret data is bound")
 }
+
+func TestIsBaselineMismatchClassifiesOnlyComparisonStages(t *testing.T) {
+	if !IsBaselineMismatch(managementError("active configuration differs from baseline")) {
+		t.Fatal("configuration comparison must classify as baseline mismatch")
+	}
+	if !IsBaselineMismatch(managementError("Node boot witness")) {
+		t.Fatal("witness comparison must classify as baseline mismatch")
+	}
+	if IsBaselineMismatch(managementError("Talos transport")) {
+		t.Fatal("transport failure must stay a pending observation")
+	}
+	if IsBaselineMismatch(ErrManagementPaused) {
+		t.Fatal("paused is not a mismatch")
+	}
+	if got := managementError("workload identity").Error(); got != "Talos management workload identity failed" {
+		t.Fatalf("unexpected stage error text %q", got)
+	}
+}
