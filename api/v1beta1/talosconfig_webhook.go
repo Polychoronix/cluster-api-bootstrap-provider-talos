@@ -77,10 +77,7 @@ func (r *TalosConfig) ValidateUpdate(ctx context.Context, oldObj *TalosConfig, n
 	// through the in-place update flow; for anything else it is a silent no-op.
 	specManagedByController := topology.IsDryRunRequest(req, r) || IsInPlaceUpdate(r) || isTopologyOwned(r)
 
-	newSpec, oldSpec := r.Spec, old.Spec
-	// Consent may change without changing the bootstrap configuration.
-	newSpec.Manage, oldSpec.Manage = false, false
-	if !specManagedByController && !cmp.Equal(newSpec, oldSpec) {
+	if !specManagedByController && !cmp.Equal(immutableSpec(r.Spec), immutableSpec(old.Spec)) {
 		return nil, apierrors.NewBadRequest("TalosConfig.Spec is immutable")
 	}
 
@@ -98,6 +95,41 @@ func isTopologyOwned(obj metav1.Object) bool {
 	_, ok := obj.GetLabels()[clusterv1.ClusterTopologyOwnedLabel]
 
 	return ok
+}
+
+// immutableSpec strips the fields a user may change on an existing TalosConfig, leaving the
+// ones that define the generated machine configuration: role, generation contract, baseline,
+// public patches, hostname and image identity. Those stay immutable for user-driven writes
+// because only the owner-driven in-place flow can realise them on a running node; an admitted
+// edit would otherwise sit inert on the object.
+//
+// The stripped fields never change what was rendered:
+//   - manage is consent, not configuration;
+//   - configRevision and strategicPatchSecretRefs (shared and per-Machine) name where private
+//     inputs come from. The original seed is never re-rendered once
+//     Status.Initialization.DataSecretCreated is set, and activation re-resolves the current
+//     references live and fails closed when the result differs from the running configuration,
+//     so a reference or revision change can be admitted without ever mutating a node;
+//   - talosEndpoint is management transport. It is not part of the rendered configuration and
+//     the observer verifies the dialled node's identity independently of it.
+func immutableSpec(spec TalosConfigSpec) TalosConfigSpec {
+	spec.Manage = false
+	spec.ConfigRevision = ""
+	spec.StrategicPatchSecretRefs = nil
+	spec.TalosEndpoint = nil
+	if spec.MachineConfig != nil {
+		overlay := *spec.MachineConfig
+		overlay.ConfigRevision = ""
+		overlay.StrategicPatchSecretRefs = nil
+		// An overlay that only carried mutable fields is equivalent to no overlay.
+		if cmp.Equal(overlay, MachineConfigOverlay{}) {
+			spec.MachineConfig = nil
+		} else {
+			spec.MachineConfig = &overlay
+		}
+	}
+
+	return spec
 }
 
 func (r *TalosConfig) validate() error {
