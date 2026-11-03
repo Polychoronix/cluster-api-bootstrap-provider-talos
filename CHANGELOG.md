@@ -1,3 +1,16 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.4
+
+- Admission webhook: `TalosConfig.spec` fields that only name private inputs,
+  consent or transport are mutable on an existing object —
+  `strategicPatchSecretRefs`, `configRevision`, `talosEndpoint`, `manage` and
+  the `machineConfig` overlay's `configRevision`/`strategicPatchSecretRefs`.
+  The original seed is never re-rendered after `DataSecretCreated` and
+  activation re-resolves the references live, failing closed on divergence, so
+  these edits cannot mutate a node. Configuration-defining fields
+  (`generateType`, `talosVersion`, `data`, `configSecretRef`, patches,
+  `hostname`, `imageFactory`) stay immutable outside the owner-driven in-place
+  update flow.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.3
 
 - Unify native standalone, MachineSet and TalosControlPlane nodes under
