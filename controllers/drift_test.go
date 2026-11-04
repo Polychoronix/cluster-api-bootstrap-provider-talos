@@ -128,3 +128,46 @@ func TestConfigDriftSkipsMachinesUpdatingInPlace(t *testing.T) {
 	require.Zero(t, f.calls)
 	require.Nil(t, condition)
 }
+
+// A paused TalosConfig (cluster.x-k8s.io/paused) is never activated or converged, but its
+// drift is still observed and reported so the operator sees what an unpause converges.
+func TestPausedTalosConfigReportsDriftWithoutActivating(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, bootstrapv1.AddToScheme(scheme))
+	require.NoError(t, clusterv1.AddToScheme(scheme))
+	cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "cluster"}}
+	machine := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "node-0", UID: "machine-uid"}}
+	machine.Spec.ClusterName = cluster.Name
+	machine.Status.NodeRef = clusterv1.MachineNodeReference{Name: "node-0"}
+	controller := true
+	tc := &bootstrapv1.TalosConfig{ObjectMeta: metav1.ObjectMeta{
+		Namespace:       "tenant",
+		Name:            "node-0",
+		UID:             "tc-uid",
+		Annotations:     map[string]string{clusterv1.PausedAnnotation: "true"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: clusterv1.GroupVersion.String(), Kind: "Machine", Name: machine.Name, UID: machine.UID, Controller: &controller}},
+	}, Spec: bootstrapv1.TalosConfigSpec{GenerateType: "worker", TalosVersion: "v1.14", Manage: true}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, machine, tc).WithStatusSubresource(tc, machine).Build()
+	calls := 0
+	r := &TalosConfigReconciler{
+		Client: c, APIReader: c, Log: ctrl.Log.WithName("test"), Scheme: scheme, ConfigDriftCheckInterval: time.Minute,
+		DriftObserver: func(context.Context, client.Reader, *clusterv1.Machine, *bootstrapv1.TalosConfig, *clusterv1.Cluster) (*op.ConfigDriftReport, error) {
+			calls++
+			return &op.ConfigDriftReport{Differing: []string{"v1alpha1/KubeNodeConfig"}}, nil
+		},
+	}
+
+	handled, result, err := r.reconcileManagementEarly(context.Background(), tc)
+	require.NoError(t, err)
+	require.True(t, handled, "paused: nothing else runs")
+	require.Equal(t, time.Minute, result.RequeueAfter)
+	require.Equal(t, 1, calls)
+
+	got := &bootstrapv1.TalosConfig{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(tc), got))
+	require.True(t, conditions.IsTrue(got, clusterv1.PausedCondition))
+	drift := conditions.Get(got, bootstrapv1.ConfigDriftCondition)
+	require.NotNil(t, drift)
+	require.Equal(t, metav1.ConditionTrue, drift.Status)
+	require.Nil(t, conditions.Get(got, bootstrapv1.ActivationReadyCondition), "no activation while paused")
+}
