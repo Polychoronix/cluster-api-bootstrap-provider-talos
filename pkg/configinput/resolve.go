@@ -51,6 +51,10 @@ type SourceIdentity struct {
 	UID             types.UID `json:"uid"`
 	ResourceVersion string    `json:"resourceVersion"`
 	Digest          [32]byte  `json:"digest"`
+	// Identity, when set, pins the source by the trust material it carries instead of
+	// its whole data (the cluster talosconfig: CA, client certificate and key, not the
+	// endpoint list). Zero for sources pinned by Digest.
+	Identity [32]byte `json:"identity,omitempty"`
 }
 
 // Resolve snapshots desired inputs and reads only Secrets in the TalosConfig namespace.

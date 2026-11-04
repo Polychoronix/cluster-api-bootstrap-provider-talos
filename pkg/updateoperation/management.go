@@ -17,6 +17,8 @@ import (
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 	endpointclient "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/talosclient"
+	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
+	"go.yaml.in/yaml/v4"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -374,11 +376,62 @@ func ValidateManagementActivation(ctx context.Context, reader client.Reader, a M
 	}
 	for _, source := range safety.Inputs {
 		secret := &corev1.Secret{}
-		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !sameManagementIdentity(managementSource(secret, source.Key), source) {
+		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !sameManagementSource(secret, source) {
 			return managementError("activated management source changed")
 		}
 	}
 	return nil
+}
+
+// managementIdentitySource pins the cluster talosconfig Secret by the trust identity it
+// carries (current context CA, client certificate and key) rather than by its whole
+// data: CABPT regenerates that Secret's endpoint list whenever control-plane membership
+// changes, which must not invalidate every activation record in the cluster. A parse
+// failure falls back to the whole-data digest, which then fails closed as before.
+func managementIdentitySource(s *corev1.Secret, key string) configinput.SourceIdentity {
+	source := managementSource(s, key)
+	identity, ok := talosIdentityDigest(s.Data[key])
+	if ok {
+		source.Identity = identity
+	}
+	return source
+}
+
+// talosIdentityDigest digests the parts of a talosconfig that identify the cluster and
+// the client: the selected context's CA, certificate and key. Endpoints and nodes are
+// transport and are left out.
+func talosIdentityDigest(data []byte) ([32]byte, bool) {
+	var config clientconfig.Config
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&config); err != nil {
+		return [32]byte{}, false
+	}
+	context := config.Contexts[config.Context]
+	if config.Context == "" || context == nil || context.CA == "" || context.Crt == "" || context.Key == "" {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(context.CA + "\n" + context.Crt + "\n" + context.Key)), true
+}
+
+// sameManagementSource compares a live Secret with a recorded source. Sources recorded
+// with a trust identity (talosconfig since craci.8) match on name/key/UID/identity so
+// endpoint regeneration keeps the record valid; sources recorded by whole-data digest
+// (every other input, and talosconfig in snapshots taken before craci.8) match as before
+// and are migrated by the next re-observation.
+// managementRecordedSource re-reads a Secret the way the recorded source was built, so
+// the strict (resourceVersion-inclusive) in-observation recheck can DeepEqual it.
+func managementRecordedSource(s *corev1.Secret, recorded configinput.SourceIdentity) configinput.SourceIdentity {
+	if recorded.Identity != [32]byte{} {
+		return managementIdentitySource(s, recorded.Key)
+	}
+	return managementSource(s, recorded.Key)
+}
+
+func sameManagementSource(s *corev1.Secret, recorded configinput.SourceIdentity) bool {
+	if recorded.Identity != [32]byte{} {
+		live := managementIdentitySource(s, recorded.Key)
+		return live.Name == recorded.Name && live.Key == recorded.Key && live.UID == recorded.UID && live.Identity == recorded.Identity
+	}
+	return sameManagementIdentity(managementSource(s, recorded.Key), recorded)
 }
 
 func managementSource(s *corev1.Secret, key string) configinput.SourceIdentity {

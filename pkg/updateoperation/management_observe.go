@@ -145,7 +145,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if e != nil {
 		return nil, e
 	}
-	o := &ManagementObservation{safety: managementSafety{Authority: a, AuthoritySpec: authoritySpec, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementSource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
+	o := &ManagementObservation{safety: managementSafety{Authority: a, AuthoritySpec: authoritySpec, ClusterUID: cluster.UID, ClusterName: cluster.Name, ClusterInputs: clusterInputs, Inputs: []configinput.SourceIdentity{managementSource(kubeSecret, "value"), managementIdentitySource(identity, "talosconfig")}}, summary: ManagementObservationSummary{InventoryVerified: true, MachinesReady: true, EtcdHealthy: a.Kind != "TalosControlPlane"}}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].Name < pinned[j].Name })
 	nodeIDs := map[types.UID]bool{}
 	etcdNodes := map[uint64]managementEtcdMember{}
@@ -425,7 +425,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	}
 	for _, source := range o.safety.Inputs {
 		secret := &corev1.Secret{}
-		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !managementSame(source, managementSource(secret, source.Key)) {
+		if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: source.Name}, secret) != nil || !managementSame(source, managementRecordedSource(secret, source)) {
 			return nil, managementError("source changed during observation")
 		}
 	}
