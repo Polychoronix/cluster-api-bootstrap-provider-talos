@@ -65,7 +65,18 @@ type ManagementObservationSummary struct {
 	InventoryVerified bool
 	MachinesReady     bool
 	EtcdHealthy       bool
+	// CurrentBaselines names the Machines whose node runs the configuration their own
+	// TalosConfig renders rather than the authority's effective policy: activation
+	// accepted them, and the owner's in-place update is what converges them.
+	CurrentBaselines []string
 }
+
+// Baseline values record which rendering a node's live configuration matched at
+// observation time.
+const (
+	BaselineEffective = "effective"
+	BaselineCurrent   = "current"
+)
 
 type managementMember struct {
 	Machine            ObjectIdentity               `json:"machine"`
@@ -80,6 +91,7 @@ type managementMember struct {
 	InfrastructureSpec json.RawMessage              `json:"infrastructureSpec"`
 	Sources            []configinput.SourceIdentity `json:"sources"`
 	Seed               configinput.SourceIdentity   `json:"seed"`
+	Baseline           string                       `json:"baseline,omitempty"`
 	Runtime            managementRuntime            `json:"runtime"`
 }
 

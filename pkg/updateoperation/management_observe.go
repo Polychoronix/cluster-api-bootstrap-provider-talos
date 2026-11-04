@@ -245,19 +245,17 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if normalized.Spec.TalosEndpoint == nil {
 			return nil, managementError("explicit Talos endpoint")
 		}
-		installer := ""
-		if normalized.Spec.ImageFactory != nil {
-			if tc.Status.ImageFactory == nil {
-				return nil, managementError("reviewed installer resolution missing")
-			}
-			installer = tc.Status.ImageFactory.InstallerImage
-			if installer == "" {
-				return nil, managementError("reviewed installer resolution missing")
-			}
-		}
-		rendered, e := configinput.Render(inputs, configinput.RenderContext{Machine: m, Cluster: cluster, InstallerImage: installer})
+		// The node must run what the authority intends (the effective policy) or, when
+		// the policy moved on, what its own TalosConfig last rendered: the second is the
+		// state an in-place update starts from, and refusing it would fence the very
+		// update that converges the node. Which one matched is recorded per member.
+		desired, e := renderManagedConfig(ctx, reader, tc, &normalized.Spec, m, cluster)
 		if e != nil {
-			return nil, managementError("baseline rendering")
+			return nil, e
+		}
+		current, e := renderManagedConfig(ctx, reader, tc, liveSpec, m, cluster)
+		if e != nil {
+			return nil, e
 		}
 		talos, e := endpointclient.New(ctx, reader, client.ObjectKey{Namespace: a.Namespace, Name: cluster.Name}, *normalized.Spec.TalosEndpoint)
 		if e != nil {
@@ -273,10 +271,14 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			talos.Close()
 			return nil, e
 		}
-		desired, e := managementConfigBytes(rendered.Data())
-		if e != nil || !bytes.Equal(actual, desired) {
-			talos.Close()
-			return nil, managementError("active configuration differs from baseline")
+		baseline := BaselineEffective
+		if differing, e := managementConfigDiff(actual, desired); e != nil || len(differing) != 0 {
+			if differing, e := managementConfigDiff(actual, current); e != nil || len(differing) != 0 {
+				talos.Close()
+				return nil, managementError("active configuration differs from baseline")
+			}
+			baseline = BaselineCurrent
+			o.summary.CurrentBaselines = append(o.summary.CurrentBaselines, m.Name)
 		}
 		provider, e := configloader.NewFromBytes(actual)
 		if e != nil || provider.Machine() == nil {
@@ -353,7 +355,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if seed != nil {
 			originalSeed = managementSource(seed, "value")
 		}
-		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: originalSeed, Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
+		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: originalSeed, Baseline: baseline, Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
 	}
 	if a.Kind == "TalosControlPlane" {
 		for i := range o.safety.Etcd {

@@ -61,7 +61,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if err := op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
 			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ActivationPending")
 		}
-		if err := r.activationStatus(ctx, tc, true, "Activated"); err != nil {
+		if err := r.activationStatusMessage(ctx, tc, true, "Activated", activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))); err != nil {
 			return true, ctrl.Result{}, err
 		}
 		return !bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{}, nil
@@ -108,6 +108,10 @@ func (r *TalosConfigReconciler) managementPausedStatus(ctx context.Context, tc *
 	return helper.Patch(ctx, tc, patch.WithOwnedConditions{Conditions: []string{clusterv1.PausedCondition}})
 }
 func (r *TalosConfigReconciler) activationStatus(ctx context.Context, tc *bootstrapv1.TalosConfig, active bool, reason string) error {
+	return r.activationStatusMessage(ctx, tc, active, reason, "")
+}
+
+func (r *TalosConfigReconciler) activationStatusMessage(ctx context.Context, tc *bootstrapv1.TalosConfig, active bool, reason, message string) error {
 	helper, err := patch.NewHelper(tc, r.Client)
 	if err != nil {
 		return err
@@ -116,8 +120,17 @@ func (r *TalosConfigReconciler) activationStatus(ctx context.Context, tc *bootst
 	if active {
 		status = metav1.ConditionTrue
 	}
-	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: status, Reason: reason, ObservedGeneration: tc.Generation})
+	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: status, Reason: reason, Message: message, ObservedGeneration: tc.Generation})
 	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
+}
+
+// activatedBaselineMessage explains an activation whose node still runs its own
+// TalosConfig's render rather than the authority's effective policy.
+func activatedBaselineMessage(baseline string) string {
+	if baseline == op.BaselineCurrent {
+		return "live configuration matches the current TalosConfig render; the owner's in-place update converges it to the effective policy"
+	}
+	return ""
 }
 
 // activationFailure publishes why an observation did not complete. Stage errors carry only

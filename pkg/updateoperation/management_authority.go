@@ -189,3 +189,30 @@ func validateManagementMemberOwners(ctx context.Context, reader client.Reader, m
 	}
 	return nil
 }
+
+// MemberBaseline reports which rendering the Machine's node matched when its authority
+// was activated: BaselineEffective, BaselineCurrent, or "" when the Machine is not part of
+// a readable activation snapshot.
+func MemberBaseline(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) string {
+	if reader == nil || m == nil || tc == nil {
+		return ""
+	}
+	a, _, err := ManagementAuthorityForMachine(ctx, reader, m, tc)
+	if err != nil {
+		return ""
+	}
+	_, _, payload, err := readManagement(ctx, reader, a)
+	if err != nil {
+		return ""
+	}
+	safety := &managementSafety{}
+	if json.Unmarshal(payload, safety) != nil {
+		return ""
+	}
+	for _, member := range safety.Members {
+		if member.Machine.Name == m.Name && member.Machine.UID == m.UID && member.TalosConfig.Name == tc.Name && member.TalosConfig.UID == tc.UID {
+			return member.Baseline
+		}
+	}
+	return ""
+}
