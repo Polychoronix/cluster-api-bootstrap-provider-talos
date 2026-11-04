@@ -476,6 +476,22 @@ Status:
 
 These statuses are also presented in the `clusterctl describe cluster --show-conditions all` output.
 
+### Pausing management for a live edit
+
+Under `manage: true` the node's configuration is owned by its `TalosConfig` (and, for control planes, the `TalosControlPlane` policy): a live edit with `talosctl patch`/`apply-config` is reported on `ConfigDrift` and converged back by the owner's in-place update, so it is not a way to persist a change.
+To hold a live edit while you work on a node, pause it first with the standard Cluster API annotation and unpause when done — the equivalent of a Flux `suspend`:
+
+```shell
+kubectl annotate talosconfig <name> cluster.x-k8s.io/paused=true
+# live edits; ConfigDrift keeps reporting what differs, nothing is applied or converged
+kubectl annotate talosconfig <name> cluster.x-k8s.io/paused-
+# the owner's in-place update now converges the node to the rendered configuration
+```
+
+Pausing the owning `Machine` or the `Cluster` (`cluster.x-k8s.io/paused`, `spec.paused`) has the same effect.
+A control-plane member that is paused holds the whole TalosControlPlane's in-place updates, because an in-place transaction needs the complete member inventory.
+To keep a change, change the rendered inputs (the TalosConfig/TalosControlPlane spec) instead; convergence applies the full desired configuration with `ApplyConfiguration` AUTO, so a delta Talos needs a reboot for (install, volume layout) reboots the node.
+
 ### Limitations
 
 Once CABPT has rendered a `Machine`'s configuration into its `<machine>-bootstrap-data` Secret, editing the `TalosConfig` spec does not re-render it.

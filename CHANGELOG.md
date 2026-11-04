@@ -1,3 +1,33 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.8
+
+- **Drift to converge.** Under `manage: true` live edits are not persisted: a
+  node whose live configuration matches neither the authority's effective
+  policy nor its own `TalosConfig` render is activated (snapshot `baseline:
+  drift` plus the differing document identities), `ActivationReady` and
+  `ConfigDrift=True` name those documents, and the owner's in-place update
+  converges the node. Only identity-class checks (trust CA, role, kubelet and
+  boot witnesses, Kubernetes version, requested-vs-live spec) remain hard
+  `BaselineMismatch` blocks. Convergence applies the full desired configuration
+  with `ApplyConfiguration` AUTO: reboot-class deltas (install, volume layout)
+  reboot the node, exactly as any TalosControlPlane spec change does today.
+- **Pause.** The standard CAPI `cluster.x-k8s.io/paused` annotation on the
+  TalosConfig, Machine or Cluster (and `Cluster.spec.paused`) stops activation,
+  apply and convergence; `ConfigDrift` keeps being observed and reported while
+  paused so an operator sees what an unpause converges. See README "Pausing
+  management for a live edit".
+- Diagnosability: `StageError` carries a bounded detail; `ActivationPending`
+  and `ActivationInvalid` on a TalosConfig name the failing stage.
+- Activation record stability: the `<cluster>-talosconfig` source is pinned by
+  its trust identity (selected context CA, client certificate and key), not by
+  the whole-Secret digest, so the endpoint regeneration that follows every
+  control-plane membership change no longer invalidates every activation record
+  (`ActivationInvalid` on unrelated nodes). A CA or credential change still
+  invalidates. Snapshots taken before this release keep their whole-digest
+  semantics until the next re-observation re-snapshots them.
+- Deferred: an explicit opt-in to adopt a node's live configuration as the
+  recorded baseline (instead of converging it) is not implemented; pausing is
+  the supported way to hold a live edit.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.7
 
 - Lockstep with CACPPT v0.9.0-craci.7, no code change. CACPPT runs this
