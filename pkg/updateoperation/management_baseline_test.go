@@ -4,6 +4,8 @@
 package updateoperation
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -91,4 +93,35 @@ func TestConfigDiffIgnoresDocumentOrderAndNamesDifferences(t *testing.T) {
 	for _, key := range differing {
 		require.NotContains(t, key, "token", "keys name documents, never content")
 	}
+}
+
+// A baseline mismatch names the Machine and the differing document identities for both
+// renderings; it never carries document content.
+func TestBaselineMismatchNamesDifferingDocuments(t *testing.T) {
+	c, request, _ := managementTLSFixture(t, 1)
+	live := request.TalosConfigs[0]
+	stored := &bootstrapv1.TalosConfig{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(live), stored))
+	stored.Spec.StrategicPatches = append(stored.Spec.StrategicPatches, baselineOtherPatch)
+	require.NoError(t, c.Update(t.Context(), stored))
+	live.Spec = stored.Spec
+	effective := stored.DeepCopy()
+	effective.Spec.StrategicPatches = append(append([]string{}, request.TalosConfigs[0].Spec.StrategicPatches[:len(request.TalosConfigs[0].Spec.StrategicPatches)-1]...), baselineLabelPatch)
+	setAuthorityPolicy(t, c, request, effective.Spec)
+	request.EffectiveTalosConfigs = []*bootstrapv1.TalosConfig{effective}
+
+	_, err := ObserveManagement(t.Context(), c, request)
+	require.True(t, IsBaselineMismatch(err))
+	require.Equal(t, "Talos management active configuration differs from baseline failed: node-0: effective[v1alpha1/KubeNodeConfig] current[v1alpha1/KubeNodeConfig]", err.Error())
+	require.NotContains(t, err.Error(), "node-role", "document content never leaks")
+}
+
+func TestStageErrorDetailIsBounded(t *testing.T) {
+	require.Equal(t, "Talos management x failed", managementError("x").Error())
+	long := managementErrorDetail("x", strings.Repeat("a", 2*stageDetailLimit)).Error()
+	require.LessOrEqual(t, len(long), len("Talos management x failed: ")+stageDetailLimit+2)
+	require.True(t, strings.HasPrefix(long, "Talos management x failed: aaaa"))
+	var stage *StageError
+	require.True(t, errors.As(managementErrorDetail("active configuration differs from baseline", "d"), &stage))
+	require.True(t, IsBaselineMismatch(stage))
 }

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"sort"
@@ -272,10 +273,14 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			return nil, e
 		}
 		baseline := BaselineEffective
-		if differing, e := managementConfigDiff(actual, desired); e != nil || len(differing) != 0 {
-			if differing, e := managementConfigDiff(actual, current); e != nil || len(differing) != 0 {
+		if effectiveDiff, e := managementConfigDiff(actual, desired); e != nil || len(effectiveDiff) != 0 {
+			currentDiff, ce := managementConfigDiff(actual, current)
+			if ce != nil || len(currentDiff) != 0 {
 				talos.Close()
-				return nil, managementError("active configuration differs from baseline")
+				if e != nil || ce != nil {
+					return nil, managementError("active configuration parse")
+				}
+				return nil, managementErrorDetail("active configuration differs from baseline", fmt.Sprintf("%s: effective[%s] current[%s]", m.Name, strings.Join(effectiveDiff, ", "), strings.Join(currentDiff, ", ")))
 			}
 			baseline = BaselineCurrent
 			o.summary.CurrentBaselines = append(o.summary.CurrentBaselines, m.Name)

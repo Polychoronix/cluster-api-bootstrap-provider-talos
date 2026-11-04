@@ -60,7 +60,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ConsentAbsent")
 		}
 		if err := op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
-			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ActivationPending")
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationPending", err)
 		}
 		if err := r.activationStatusMessage(ctx, tc, true, "Activated", activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))); err != nil {
 			return true, ctrl.Result{}, err
@@ -69,7 +69,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	}
 	if state, err := op.ReadManagementStatus(ctx, r.APIReader, authority); err == nil && state.Activated && manage {
 		if err = op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
-			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ActivationInvalid")
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationInvalid", err)
 		}
 		if err = r.activationStatus(ctx, tc, true, "Activated"); err != nil {
 			return true, ctrl.Result{}, err
@@ -191,8 +191,8 @@ func activatedBaselineMessage(baseline string) string {
 // message per object; the 2s requeue would otherwise repeat it indefinitely.
 func (r *TalosConfigReconciler) activationFailure(ctx context.Context, tc *bootstrapv1.TalosConfig, reason string, cause error) error {
 	message := cause.Error()
-	if len(message) > 256 {
-		message = message[:256]
+	if len(message) > 512 {
+		message = message[:512]
 	}
 	if previous := conditions.Get(tc, bootstrapv1.ActivationReadyCondition); previous == nil || previous.Message != message || previous.Reason != reason {
 		r.Log.Info("Talos observation not complete", "talosconfig", client.ObjectKeyFromObject(tc).String(), "reason", reason, "stage", message)

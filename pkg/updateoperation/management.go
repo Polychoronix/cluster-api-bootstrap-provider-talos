@@ -159,10 +159,22 @@ type managementRecord struct {
 
 // StageError reports which fixed observation/activation stage failed. Stage names are
 // constant strings chosen in this package; they never embed Secret data, configuration
-// bytes or transport error text, so the message is safe to publish on conditions.
-type StageError struct{ Stage string }
+// bytes or transport error text, so the message is safe to publish on conditions. Detail,
+// when set, names what differed (Machine name, document identities), never content.
+type StageError struct {
+	Stage  string
+	Detail string
+}
 
-func (e *StageError) Error() string { return "Talos management " + e.Stage + " failed" }
+func (e *StageError) Error() string {
+	if e.Detail != "" {
+		return "Talos management " + e.Stage + " failed: " + e.Detail
+	}
+	return "Talos management " + e.Stage + " failed"
+}
+
+// stageDetailLimit caps a StageError detail so condition messages stay readable.
+const stageDetailLimit = 320
 
 // baselineMismatchStages are the comparisons that only fail after the node was reached:
 // the dial worked, but what runs there does not match the requested inputs or identity.
@@ -183,7 +195,16 @@ func IsBaselineMismatch(err error) bool {
 	return errors.As(err, &stage) && baselineMismatchStages[stage.Stage]
 }
 
-func managementError(stage string) error          { return &StageError{Stage: stage} }
+func managementError(stage string) error { return &StageError{Stage: stage} }
+
+// managementErrorDetail is managementError with a bounded, identity-only detail.
+func managementErrorDetail(stage, detail string) error {
+	if len(detail) > stageDetailLimit {
+		detail = detail[:stageDetailLimit-1] + "…"
+	}
+	return &StageError{Stage: stage, Detail: detail}
+}
+
 func managementName(a ManagementAuthority) string { return a.Name + "-management" }
 func managementOwned(s *corev1.Secret, a ManagementAuthority) bool {
 	if s.Namespace != a.Namespace || s.Annotations[ProvenanceAnnotation] != managementProvenance {
