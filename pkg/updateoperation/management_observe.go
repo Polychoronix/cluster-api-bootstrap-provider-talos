@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"reflect"
 	"sort"
@@ -272,18 +271,34 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			talos.Close()
 			return nil, e
 		}
+		// Which rendering the node runs decides nothing about activation: under
+		// management, live edits are not persisted, so a node matching neither the
+		// effective policy nor its own TalosConfig is drift the owner converges in
+		// place. Only the identity checks below refuse activation.
 		baseline := BaselineEffective
-		if effectiveDiff, e := managementConfigDiff(actual, desired); e != nil || len(effectiveDiff) != 0 {
-			currentDiff, ce := managementConfigDiff(actual, current)
-			if ce != nil || len(currentDiff) != 0 {
+		var drift []string
+		effectiveDiff, e := managementConfigDiff(actual, desired)
+		if e != nil {
+			talos.Close()
+			return nil, e
+		}
+		if len(effectiveDiff) != 0 {
+			currentDiff, e := managementConfigDiff(actual, current)
+			if e != nil {
 				talos.Close()
-				if e != nil || ce != nil {
-					return nil, managementError("active configuration parse")
-				}
-				return nil, managementErrorDetail("active configuration differs from baseline", fmt.Sprintf("%s: effective[%s] current[%s]", m.Name, strings.Join(effectiveDiff, ", "), strings.Join(currentDiff, ", ")))
+				return nil, e
 			}
-			baseline = BaselineCurrent
-			o.summary.CurrentBaselines = append(o.summary.CurrentBaselines, m.Name)
+			if len(currentDiff) == 0 {
+				baseline = BaselineCurrent
+				o.summary.CurrentBaselines = append(o.summary.CurrentBaselines, m.Name)
+			} else {
+				baseline = BaselineDrift
+				drift = effectiveDiff
+				if o.summary.Drifted == nil {
+					o.summary.Drifted = map[string][]string{}
+				}
+				o.summary.Drifted[m.Name] = effectiveDiff
+			}
 		}
 		provider, e := configloader.NewFromBytes(actual)
 		if e != nil || provider.Machine() == nil {
@@ -360,7 +375,7 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if seed != nil {
 			originalSeed = managementSource(seed, "value")
 		}
-		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: originalSeed, Baseline: baseline, Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
+		o.safety.Members = append(o.safety.Members, managementMember{Machine: managementObject(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: managementObject(bootstrapv1.GroupVersion.Group, "TalosConfig", tc), Infrastructure: managementObject(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, infra), NodeName: node.Name, NodeUID: node.UID, ProviderID: node.Spec.ProviderID, MachineSpec: ms, ConfigSpec: cs, EffectiveSpec: effectiveSpec, InfrastructureSpec: ib, Sources: inputs.Sources(), Seed: originalSeed, Baseline: baseline, Drift: drift, Runtime: managementRuntime{Configuration: actual, BootID: observed.BootID, OSVersion: observed.OSVersion, KubeletImage: observed.KubeletImage, SchematicID: observed.SchematicID, Extensions: observed.Extensions}})
 	}
 	if a.Kind == "TalosControlPlane" {
 		for i := range o.safety.Etcd {

@@ -191,28 +191,29 @@ func validateManagementMemberOwners(ctx context.Context, reader client.Reader, m
 }
 
 // MemberBaseline reports which rendering the Machine's node matched when its authority
-// was activated: BaselineEffective, BaselineCurrent, or "" when the Machine is not part of
-// a readable activation snapshot.
-func MemberBaseline(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) string {
+// was activated (BaselineEffective, BaselineCurrent, BaselineDrift) and, for drift, the
+// document identities that differed from the effective policy; "" when the Machine is not
+// part of a readable activation snapshot.
+func MemberBaseline(ctx context.Context, reader client.Reader, m *clusterv1.Machine, tc *bootstrapv1.TalosConfig) (string, []string) {
 	if reader == nil || m == nil || tc == nil {
-		return ""
+		return "", nil
 	}
 	a, _, err := ManagementAuthorityForMachine(ctx, reader, m, tc)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	_, _, payload, err := readManagement(ctx, reader, a)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	safety := &managementSafety{}
 	if json.Unmarshal(payload, safety) != nil {
-		return ""
+		return "", nil
 	}
 	for _, member := range safety.Members {
 		if member.Machine.Name == m.Name && member.Machine.UID == m.UID && member.TalosConfig.Name == tc.Name && member.TalosConfig.UID == tc.UID {
-			return member.Baseline
+			return member.Baseline, member.Drift
 		}
 	}
-	return ""
+	return "", nil
 }

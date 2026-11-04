@@ -106,8 +106,8 @@ func TestNativeGenerationSourceMatchesResolverIdentity(t *testing.T) {
 }
 
 func TestIsBaselineMismatchClassifiesOnlyComparisonStages(t *testing.T) {
-	if !IsBaselineMismatch(managementError("active configuration differs from baseline")) {
-		t.Fatal("configuration comparison must classify as baseline mismatch")
+	if !IsBaselineMismatch(managementError("active Talos trust identity")) {
+		t.Fatal("trust identity comparison must classify as baseline mismatch")
 	}
 	if !IsBaselineMismatch(managementError("Node boot witness")) {
 		t.Fatal("witness comparison must classify as baseline mismatch")

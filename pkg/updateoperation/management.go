@@ -71,6 +71,11 @@ type ManagementObservationSummary struct {
 	// TalosConfig renders rather than the authority's effective policy: activation
 	// accepted them, and the owner's in-place update is what converges them.
 	CurrentBaselines []string
+	// Drifted maps Machines whose node runs neither rendering to the document
+	// identities (apiVersion/kind[/name]) on which the live configuration differs from
+	// the effective policy. Under management, live edits are not persisted: such a
+	// node is activated and converged by the owner's in-place update.
+	Drifted map[string][]string
 }
 
 // Baseline values record which rendering a node's live configuration matched at
@@ -78,6 +83,9 @@ type ManagementObservationSummary struct {
 const (
 	BaselineEffective = "effective"
 	BaselineCurrent   = "current"
+	// BaselineDrift: the live configuration matched neither rendering; the identity
+	// checks passed and the node is to be converged, not refused.
+	BaselineDrift = "drift"
 )
 
 type managementMember struct {
@@ -94,6 +102,7 @@ type managementMember struct {
 	Sources            []configinput.SourceIdentity `json:"sources"`
 	Seed               configinput.SourceIdentity   `json:"seed"`
 	Baseline           string                       `json:"baseline,omitempty"`
+	Drift              []string                     `json:"drift,omitempty"`
 	Runtime            managementRuntime            `json:"runtime"`
 }
 
@@ -181,13 +190,12 @@ const stageDetailLimit = 320
 // baselineMismatchStages are the comparisons that only fail after the node was reached:
 // the dial worked, but what runs there does not match the requested inputs or identity.
 var baselineMismatchStages = map[string]bool{
-	"active configuration differs from baseline": true,
-	"active Talos trust identity":                true,
-	"actual kubelet witness":                     true,
-	"Node boot witness":                          true,
-	"actual role":                                true,
-	"requested configuration differs from live":  true,
-	"Machine actual Kubernetes version differs":  true,
+	"active Talos trust identity":               true,
+	"actual kubelet witness":                    true,
+	"Node boot witness":                         true,
+	"actual role":                               true,
+	"requested configuration differs from live": true,
+	"Machine actual Kubernetes version differs": true,
 }
 
 // IsBaselineMismatch reports whether err is a post-observation comparison failure rather

@@ -58,9 +58,11 @@ func TestObservationAcceptsCurrentTalosConfigBaseline(t *testing.T) {
 	require.Equal(t, BaselineEffective, observation.safety.Members[0].Baseline)
 }
 
-// A node that matches neither the effective policy nor its own TalosConfig is a baseline
-// mismatch, exactly as before.
-func TestObservationRejectsNodeMatchingNeitherBaseline(t *testing.T) {
+// A node that matches neither the effective policy nor its own TalosConfig is drift to
+// converge, not an activation blocker: the observation succeeds, records the member as
+// drifted with the differing document identities (never content), and the owner's
+// in-place update converges it.
+func TestObservationActivatesDriftedNodeAndNamesDocuments(t *testing.T) {
 	c, request, _ := managementTLSFixture(t, 1)
 	live := request.TalosConfigs[0]
 	stored := &bootstrapv1.TalosConfig{}
@@ -73,9 +75,30 @@ func TestObservationRejectsNodeMatchingNeitherBaseline(t *testing.T) {
 	setAuthorityPolicy(t, c, request, effective.Spec)
 	request.EffectiveTalosConfigs = []*bootstrapv1.TalosConfig{effective}
 
-	_, err := ObserveManagement(t.Context(), c, request)
-	require.ErrorContains(t, err, "active configuration differs from baseline")
-	require.True(t, IsBaselineMismatch(err))
+	observation, err := ObserveManagement(t.Context(), c, request)
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"node-0": {"v1alpha1/KubeNodeConfig"}}, observation.Summary().Drifted)
+	require.Empty(t, observation.Summary().CurrentBaselines)
+	require.Equal(t, BaselineDrift, observation.safety.Members[0].Baseline)
+	require.Equal(t, []string{"v1alpha1/KubeNodeConfig"}, observation.safety.Members[0].Drift)
+	for _, id := range observation.safety.Members[0].Drift {
+		require.NotContains(t, id, "node-role", "document content never leaks")
+	}
+
+	// Activation records the drift; the snapshot reports it back per Machine.
+	tcp := &unstructured.Unstructured{}
+	tcp.SetAPIVersion(request.Authority.APIVersion)
+	tcp.SetKind(request.Authority.Kind)
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: request.Authority.Namespace, Name: request.Authority.Name}, tcp))
+	tcp.Object["spec"].(map[string]any)["manage"] = true
+	require.NoError(t, c.Update(t.Context(), tcp))
+	request.Manage = true
+	activated, err := ActivateManagement(t.Context(), c, c, request)
+	require.NoError(t, err)
+	require.True(t, activated.Activated)
+	baseline, drift := MemberBaseline(t.Context(), c, request.Machines[0], request.TalosConfigs[0])
+	require.Equal(t, BaselineDrift, baseline)
+	require.Equal(t, []string{"v1alpha1/KubeNodeConfig"}, drift)
 }
 
 func TestConfigDiffIgnoresDocumentOrderAndNamesDifferences(t *testing.T) {
@@ -95,33 +118,13 @@ func TestConfigDiffIgnoresDocumentOrderAndNamesDifferences(t *testing.T) {
 	}
 }
 
-// A baseline mismatch names the Machine and the differing document identities for both
-// renderings; it never carries document content.
-func TestBaselineMismatchNamesDifferingDocuments(t *testing.T) {
-	c, request, _ := managementTLSFixture(t, 1)
-	live := request.TalosConfigs[0]
-	stored := &bootstrapv1.TalosConfig{}
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(live), stored))
-	stored.Spec.StrategicPatches = append(stored.Spec.StrategicPatches, baselineOtherPatch)
-	require.NoError(t, c.Update(t.Context(), stored))
-	live.Spec = stored.Spec
-	effective := stored.DeepCopy()
-	effective.Spec.StrategicPatches = append(append([]string{}, request.TalosConfigs[0].Spec.StrategicPatches[:len(request.TalosConfigs[0].Spec.StrategicPatches)-1]...), baselineLabelPatch)
-	setAuthorityPolicy(t, c, request, effective.Spec)
-	request.EffectiveTalosConfigs = []*bootstrapv1.TalosConfig{effective}
-
-	_, err := ObserveManagement(t.Context(), c, request)
-	require.True(t, IsBaselineMismatch(err))
-	require.Equal(t, "Talos management active configuration differs from baseline failed: node-0: effective[v1alpha1/KubeNodeConfig] current[v1alpha1/KubeNodeConfig]", err.Error())
-	require.NotContains(t, err.Error(), "node-role", "document content never leaks")
-}
-
 func TestStageErrorDetailIsBounded(t *testing.T) {
 	require.Equal(t, "Talos management x failed", managementError("x").Error())
 	long := managementErrorDetail("x", strings.Repeat("a", 2*stageDetailLimit)).Error()
 	require.LessOrEqual(t, len(long), len("Talos management x failed: ")+stageDetailLimit+2)
 	require.True(t, strings.HasPrefix(long, "Talos management x failed: aaaa"))
 	var stage *StageError
-	require.True(t, errors.As(managementErrorDetail("active configuration differs from baseline", "d"), &stage))
-	require.True(t, IsBaselineMismatch(stage))
+	require.True(t, errors.As(managementErrorDetail("active Talos trust identity", "d"), &stage))
+	require.True(t, IsBaselineMismatch(stage), "identity-class failures stay hard blocks")
+	require.False(t, IsBaselineMismatch(managementError("active configuration differs from baseline")), "configuration differences are drift, not a block")
 }

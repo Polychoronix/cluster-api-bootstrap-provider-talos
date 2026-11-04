@@ -23,23 +23,35 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	if r.APIReader == nil {
 		return true, ctrl.Result{}, errors.New("Talos activation APIReader required")
 	}
-	if hasManagementPause(tc) {
-		return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
-	}
 	owner := metav1.GetControllerOf(tc)
 	if owner == nil || owner.Kind != "Machine" || owner.APIVersion != clusterv1.GroupVersion.String() {
+		if hasManagementPause(tc) {
+			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+		}
 		return false, ctrl.Result{}, nil
 	}
 	m := &clusterv1.Machine{}
 	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: tc.Namespace, Name: owner.Name}, m) != nil || m.UID != owner.UID {
+		if hasManagementPause(tc) {
+			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+		}
 		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "AssociationPending")
 	}
 	cluster := &clusterv1.Cluster{}
 	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.ClusterName}, cluster) != nil {
 		return true, ctrl.Result{}, errors.New("Talos activation Cluster lookup failed")
 	}
-	if hasManagementPause(m) || hasManagementPause(cluster) || cluster.Spec.Paused != nil && *cluster.Spec.Paused {
-		return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+	// Paused (CAPI cluster.x-k8s.io/paused on the TalosConfig, Machine or Cluster, or
+	// Cluster.spec.paused): nothing is activated, applied or converged, but drift is
+	// still observed and reported so the operator sees what an unpause will converge.
+	if hasManagementPause(tc) || hasManagementPause(m) || hasManagementPause(cluster) || cluster.Spec.Paused != nil && *cluster.Spec.Paused {
+		if err := r.managementPausedStatus(ctx, tc); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		if !m.Status.NodeRef.IsDefined() {
+			return true, ctrl.Result{}, nil
+		}
+		return true, r.reconcileConfigDrift(ctx, tc, m, cluster), nil
 	}
 	// Real first bootstrap is not an in-place operation and cannot require a Node that does not exist yet.
 	if m.Spec.Bootstrap.DataSecretName == nil && !m.Status.NodeRef.IsDefined() {
@@ -92,12 +104,25 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ConsentAbsent")
 	}
 	if _, err = op.ActivateManagement(ctx, r.Client, r.APIReader, request); err != nil {
-		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ActivationPending")
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationPending", err)
 	}
-	if err := r.activationStatus(ctx, tc, true, "Activated"); err != nil {
+	if err := r.activationStatusMessage(ctx, tc, true, "Activated", observedBaselineMessage(observation.Summary(), m.Name)); err != nil {
 		return true, ctrl.Result{}, err
 	}
 	return true, r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+}
+
+// observedBaselineMessage is activatedBaselineMessage for a fresh observation.
+func observedBaselineMessage(summary op.ManagementObservationSummary, machine string) string {
+	if drift := summary.Drifted[machine]; len(drift) > 0 {
+		return activatedBaselineMessage(op.BaselineDrift, drift)
+	}
+	for _, name := range summary.CurrentBaselines {
+		if name == machine {
+			return activatedBaselineMessage(op.BaselineCurrent, nil)
+		}
+	}
+	return ""
 }
 
 // reconcileConfigDrift re-observes an activated node on the configured interval and
@@ -176,11 +201,15 @@ func (r *TalosConfigReconciler) activationStatusMessage(ctx context.Context, tc 
 	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
 }
 
-// activatedBaselineMessage explains an activation whose node still runs its own
-// TalosConfig's render rather than the authority's effective policy.
-func activatedBaselineMessage(baseline string) string {
-	if baseline == op.BaselineCurrent {
+// activatedBaselineMessage explains an activation whose node does not (yet) run the
+// authority's effective policy: either its own TalosConfig's render, or a drifted live
+// configuration. Both are converged by the owner's in-place update.
+func activatedBaselineMessage(baseline string, drift []string) string {
+	switch baseline {
+	case op.BaselineCurrent:
 		return "live configuration matches the current TalosConfig render; the owner's in-place update converges it to the effective policy"
+	case op.BaselineDrift:
+		return "live configuration drifted from the effective policy in: " + strings.Join(drift, ", ") + "; the owner's in-place update converges it"
 	}
 	return ""
 }
