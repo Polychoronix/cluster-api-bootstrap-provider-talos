@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
 	"time"
 )
 
@@ -64,7 +65,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if err := r.activationStatusMessage(ctx, tc, true, "Activated", activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))); err != nil {
 			return true, ctrl.Result{}, err
 		}
-		return !bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{}, nil
+		return !bootstrapv1.IsInPlaceUpdate(tc), r.reconcileConfigDrift(ctx, tc, m, cluster), nil
 	}
 	if state, err := op.ReadManagementStatus(ctx, r.APIReader, authority); err == nil && state.Activated && manage {
 		if err = op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
@@ -73,7 +74,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if err = r.activationStatus(ctx, tc, true, "Activated"); err != nil {
 			return true, ctrl.Result{}, err
 		}
-		return !bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{}, nil
+		return !bootstrapv1.IsInPlaceUpdate(tc), r.reconcileConfigDrift(ctx, tc, m, cluster), nil
 	}
 	request := op.ManagementObservationRequest{Authority: authority, Cluster: cluster, Manage: manage, Machines: []*clusterv1.Machine{m}, TalosConfigs: []*bootstrapv1.TalosConfig{tc}}
 	observation, err := op.ObserveManagement(ctx, r.APIReader, request)
@@ -93,7 +94,58 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	if _, err = op.ActivateManagement(ctx, r.Client, r.APIReader, request); err != nil {
 		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ActivationPending")
 	}
-	return true, ctrl.Result{}, r.activationStatus(ctx, tc, true, "Activated")
+	if err := r.activationStatus(ctx, tc, true, "Activated"); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	return true, r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+}
+
+// reconcileConfigDrift re-observes an activated node on the configured interval and
+// reports whether its live configuration still matches the TalosConfig's render. It
+// requeues for the next check and never applies anything.
+func (r *TalosConfigReconciler) reconcileConfigDrift(ctx context.Context, tc *bootstrapv1.TalosConfig, m *clusterv1.Machine, cluster *clusterv1.Cluster) ctrl.Result {
+	if r.ConfigDriftCheckInterval <= 0 || bootstrapv1.IsInPlaceUpdate(tc) {
+		return ctrl.Result{}
+	}
+	if last, ok := r.driftChecked.Load(tc.UID); ok {
+		if wait := r.ConfigDriftCheckInterval - time.Since(last.(time.Time)); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}
+		}
+	}
+	observe := r.DriftObserver
+	if observe == nil {
+		observe = op.ObserveConfigDrift
+	}
+	report, err := observe(ctx, r.APIReader, m, tc, cluster)
+	r.driftChecked.Store(tc.UID, time.Now())
+	condition := metav1.Condition{Type: bootstrapv1.ConfigDriftCondition, Status: metav1.ConditionFalse, Reason: bootstrapv1.NoConfigDriftReason, ObservedGeneration: tc.Generation}
+	switch {
+	case err != nil && op.IsObservationPending(err):
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = bootstrapv1.DriftObservationPendingReason
+		condition.Message = err.Error()
+	case err != nil:
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = bootstrapv1.DriftObservationPendingReason
+		condition.Message = err.Error()
+	case report.Drifted():
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = bootstrapv1.ConfigDriftedReason
+		condition.Message = "live configuration differs from the TalosConfig render in: " + strings.Join(report.Differing, ", ")
+		if len(condition.Message) > 1024 {
+			condition.Message = condition.Message[:1024]
+		}
+	}
+	if previous := conditions.Get(tc, bootstrapv1.ConfigDriftCondition); previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason || previous.Message != condition.Message {
+		r.Log.Info("Talos configuration drift observed", "talosconfig", client.ObjectKeyFromObject(tc).String(), "status", condition.Status, "reason", condition.Reason, "message", condition.Message)
+	}
+	if helper, err := patch.NewHelper(tc, r.Client); err == nil {
+		conditions.Set(tc, condition)
+		if err := helper.Patch(ctx, tc, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ConfigDriftCondition}}); err != nil {
+			r.Log.Error(err, "failed to record configuration drift", "talosconfig", client.ObjectKeyFromObject(tc).String())
+		}
+	}
+	return ctrl.Result{RequeueAfter: r.ConfigDriftCheckInterval}
 }
 func hasManagementPause(o client.Object) bool {
 	_, ok := o.GetAnnotations()[clusterv1.PausedAnnotation]

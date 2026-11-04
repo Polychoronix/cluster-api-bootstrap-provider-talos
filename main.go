@@ -54,6 +54,7 @@ var (
 	runtimeExtensionCertDir string
 
 	enableMachinePoolInPlaceUpdates bool
+	configDriftCheckInterval        time.Duration
 )
 
 const (
@@ -100,6 +101,9 @@ func InitFlags(fs *pflag.FlagSet) {
 			"result to the pool's running members over the Talos API, one node at a time. Cluster API has no "+
 			"in-place update flow for MachinePools, so this is implemented by CABPT rather than through the "+
 			"runtime extension hooks. Set to false to keep a pool's rendered configuration frozen once written.")
+
+	fs.DurationVar(&configDriftCheckInterval, "config-drift-check-interval", 30*time.Minute,
+		"How often an activated TalosConfig's node is re-observed and its live configuration compared with the TalosConfig render, reported on the ConfigDrift condition only; 0 disables.")
 
 	fs.StringVar(&imageFactoryURL, "image-factory-url", imagefactory.DefaultURL,
 		"Base URL of the Talos Image Factory used to register the schematic declared in a TalosConfig's "+
@@ -204,6 +208,7 @@ func setupReconcilers(ctx context.Context, mgr manager.Manager) {
 		Scheme:                    mgr.GetScheme(),
 		WatchFilterValue:          watchFilterValue,
 		MachinePoolInPlaceUpdates: enableMachinePoolInPlaceUpdates,
+		ConfigDriftCheckInterval:  configDriftCheckInterval,
 		NodeClientFactory:         inplace.NewNodeClient(mgr.GetClient()),
 		ImageFactory:              imagefactory.NewCached(factoryClient, 10*time.Minute),
 	}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 10}); err != nil {

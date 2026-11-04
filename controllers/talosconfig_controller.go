@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/siderolabs/talos/pkg/machinery/config"
@@ -39,6 +41,7 @@ import (
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/imagefactory"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/inplace"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
+	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -57,6 +60,16 @@ type TalosConfigReconciler struct {
 	Log              logr.Logger
 	Scheme           *runtime.Scheme
 	WatchFilterValue string
+
+	// ConfigDriftCheckInterval is how often an activated TalosConfig's node is re-observed
+	// and its live configuration compared with the TalosConfig's current render. The result
+	// is reported on the ConfigDrift condition only; nothing is applied. Zero disables it.
+	ConfigDriftCheckInterval time.Duration
+	// DriftObserver performs one drift observation; nil uses updateoperation.ObserveConfigDrift.
+	// Tests substitute it so the condition logic runs without a Talos endpoint.
+	DriftObserver func(ctx context.Context, reader client.Reader, m *capiv1.Machine, tc *bootstrapv1beta1.TalosConfig, cluster *capiv1.Cluster) (*op.ConfigDriftReport, error)
+	// driftChecked remembers, per TalosConfig UID, when the node was last observed for drift.
+	driftChecked sync.Map
 
 	// MachinePoolInPlaceUpdates enables re-rendering the bootstrap data of a MachinePool-owned
 	// TalosConfig when its spec changes, and applying the result to the pool's running members
