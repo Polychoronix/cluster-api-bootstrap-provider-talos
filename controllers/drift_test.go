@@ -118,15 +118,34 @@ func TestConfigDriftDisabledByZeroInterval(t *testing.T) {
 	require.Nil(t, condition)
 }
 
-func TestConfigDriftSkipsMachinesUpdatingInPlace(t *testing.T) {
+// During an in-place update the owner converges drift through the transaction: the
+// condition goes to observation pending (never a stale True that would offer the next
+// update), and the timer resets so the node is re-observed as soon as it ends.
+func TestConfigDriftPendingDuringInPlaceUpdateThenReobserved(t *testing.T) {
 	f := newDriftFixture(t, time.Minute)
+	f.report = &op.ConfigDriftReport{Differing: []string{"v1alpha1/KubeNodeConfig"}}
+	_, condition := f.run(t)
+	require.Equal(t, 1, f.calls)
+	require.Equal(t, metav1.ConditionTrue, condition.Status)
+
 	tc := &bootstrapv1.TalosConfig{}
 	require.NoError(t, f.client.Get(context.Background(), client.ObjectKeyFromObject(f.tc), tc))
 	tc.Annotations = map[string]string{clusterv1.UpdateInProgressAnnotation: ""}
 	require.NoError(t, f.client.Update(context.Background(), tc))
-	_, condition := f.run(t)
-	require.Zero(t, f.calls)
-	require.Nil(t, condition)
+	result, condition := f.run(t)
+	require.Equal(t, 1, f.calls, "no observation while the transaction runs")
+	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, metav1.ConditionUnknown, condition.Status)
+	require.Equal(t, bootstrapv1.DriftObservationPendingReason, condition.Reason)
+	require.Equal(t, "in-place update in progress; re-observed when it completes", condition.Message)
+
+	require.NoError(t, f.client.Get(context.Background(), client.ObjectKeyFromObject(f.tc), tc))
+	tc.Annotations = nil
+	require.NoError(t, f.client.Update(context.Background(), tc))
+	f.report = &op.ConfigDriftReport{}
+	_, condition = f.run(t)
+	require.Equal(t, 2, f.calls, "re-observed immediately, not after the interval")
+	require.Equal(t, metav1.ConditionFalse, condition.Status)
 }
 
 // A paused TalosConfig (cluster.x-k8s.io/paused) is never activated or converged, but its

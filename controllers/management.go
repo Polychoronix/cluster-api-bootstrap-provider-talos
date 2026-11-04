@@ -129,7 +129,15 @@ func observedBaselineMessage(summary op.ManagementObservationSummary, machine st
 // reports whether its live configuration still matches the TalosConfig's render. It
 // requeues for the next check and never applies anything.
 func (r *TalosConfigReconciler) reconcileConfigDrift(ctx context.Context, tc *bootstrapv1.TalosConfig, m *clusterv1.Machine, cluster *clusterv1.Cluster) ctrl.Result {
-	if r.ConfigDriftCheckInterval <= 0 || bootstrapv1.IsInPlaceUpdate(tc) {
+	if r.ConfigDriftCheckInterval <= 0 {
+		return ctrl.Result{}
+	}
+	if bootstrapv1.IsInPlaceUpdate(tc) {
+		// The owner converges drift through this transaction: a ConfigDrift=True left
+		// standing would offer the next update before re-observation. Mark the observation
+		// pending and re-observe as soon as the transaction ends.
+		r.driftChecked.Delete(tc.UID)
+		r.recordConfigDrift(ctx, tc, metav1.Condition{Type: bootstrapv1.ConfigDriftCondition, Status: metav1.ConditionUnknown, Reason: bootstrapv1.DriftObservationPendingReason, Message: "in-place update in progress; re-observed when it completes", ObservedGeneration: tc.Generation})
 		return ctrl.Result{}
 	}
 	if last, ok := r.driftChecked.Load(tc.UID); ok {
@@ -161,7 +169,14 @@ func (r *TalosConfigReconciler) reconcileConfigDrift(ctx context.Context, tc *bo
 			condition.Message = condition.Message[:1024]
 		}
 	}
-	if previous := conditions.Get(tc, bootstrapv1.ConfigDriftCondition); previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason || previous.Message != condition.Message {
+	r.recordConfigDrift(ctx, tc, condition)
+	return ctrl.Result{RequeueAfter: r.ConfigDriftCheckInterval}
+}
+
+// recordConfigDrift publishes a ConfigDrift condition, logging transitions.
+func (r *TalosConfigReconciler) recordConfigDrift(ctx context.Context, tc *bootstrapv1.TalosConfig, condition metav1.Condition) {
+	previous := conditions.Get(tc, bootstrapv1.ConfigDriftCondition)
+	if previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason || previous.Message != condition.Message {
 		r.Log.Info("Talos configuration drift observed", "talosconfig", client.ObjectKeyFromObject(tc).String(), "status", condition.Status, "reason", condition.Reason, "message", condition.Message)
 	}
 	if helper, err := patch.NewHelper(tc, r.Client); err == nil {
@@ -170,7 +185,6 @@ func (r *TalosConfigReconciler) reconcileConfigDrift(ctx context.Context, tc *bo
 			r.Log.Error(err, "failed to record configuration drift", "talosconfig", client.ObjectKeyFromObject(tc).String())
 		}
 	}
-	return ctrl.Result{RequeueAfter: r.ConfigDriftCheckInterval}
 }
 func hasManagementPause(o client.Object) bool {
 	_, ok := o.GetAnnotations()[clusterv1.PausedAnnotation]
