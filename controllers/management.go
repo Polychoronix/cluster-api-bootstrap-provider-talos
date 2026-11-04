@@ -10,6 +10,7 @@ import (
 	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,14 +26,14 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	}
 	owner := metav1.GetControllerOf(tc)
 	if owner == nil || owner.Kind != "Machine" || owner.APIVersion != clusterv1.GroupVersion.String() {
-		if hasManagementPause(tc) {
+		if annotations.HasPaused(tc) {
 			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
 		}
 		return false, ctrl.Result{}, nil
 	}
 	m := &clusterv1.Machine{}
 	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: tc.Namespace, Name: owner.Name}, m) != nil || m.UID != owner.UID {
-		if hasManagementPause(tc) {
+		if annotations.HasPaused(tc) {
 			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
 		}
 		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "AssociationPending")
@@ -44,7 +45,7 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 	// Paused (CAPI cluster.x-k8s.io/paused on the TalosConfig, Machine or Cluster, or
 	// Cluster.spec.paused): nothing is activated, applied or converged, but drift is
 	// still observed and reported so the operator sees what an unpause will converge.
-	if hasManagementPause(tc) || hasManagementPause(m) || hasManagementPause(cluster) || cluster.Spec.Paused != nil && *cluster.Spec.Paused {
+	if annotations.HasPaused(tc) || annotations.IsPaused(cluster, m) {
 		if err := r.managementPausedStatus(ctx, tc); err != nil {
 			return true, ctrl.Result{}, err
 		}
@@ -74,7 +75,13 @@ func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc
 		if err := op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
 			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationPending", err)
 		}
-		if err := r.activationStatusMessage(ctx, tc, true, "Activated", activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))); err != nil {
+		message := activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))
+		if conditions.IsFalse(tc, bootstrapv1.ConfigDriftCondition) {
+			// The snapshot still says what the node ran at activation; a later drift
+			// observation finding no difference means the in-place update converged it.
+			message = ""
+		}
+		if err := r.activationStatusMessage(ctx, tc, true, "Activated", message); err != nil {
 			return true, ctrl.Result{}, err
 		}
 		return !bootstrapv1.IsInPlaceUpdate(tc), r.reconcileConfigDrift(ctx, tc, m, cluster), nil
@@ -185,10 +192,6 @@ func (r *TalosConfigReconciler) recordConfigDrift(ctx context.Context, tc *boots
 			r.Log.Error(err, "failed to record configuration drift", "talosconfig", client.ObjectKeyFromObject(tc).String())
 		}
 	}
-}
-func hasManagementPause(o client.Object) bool {
-	_, ok := o.GetAnnotations()[clusterv1.PausedAnnotation]
-	return ok
 }
 func (r *TalosConfigReconciler) managementPausedStatus(ctx context.Context, tc *bootstrapv1.TalosConfig) error {
 	helper, err := patch.NewHelper(tc, r.Client)
