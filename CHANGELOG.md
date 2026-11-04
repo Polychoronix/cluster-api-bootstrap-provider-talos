@@ -1,3 +1,12 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.7
+
+- Lockstep with CACPPT v0.9.0-craci.7, no code change. CACPPT runs this
+  module's `pkg/updateoperation` in-process for TalosControlPlane observation,
+  so the craci.6 activation-policy and baseline changes reach a control plane
+  only once CACPPT vendors craci.6 (it did not until its craci.7). Release
+  checklist: bump CACPPT's CABPT require/replace and `CABPT_VERSION` before
+  tagging a CACPPT release that depends on a change here.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.6
 
 - Activation policy understands `TalosControlPlane.spec.controlPlaneConfig.members`
