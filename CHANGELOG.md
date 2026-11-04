@@ -15,6 +15,10 @@
   apply and convergence; `ConfigDrift` keeps being observed and reported while
   paused so an operator sees what an unpause converges. See README "Pausing
   management for a live edit".
+- `ConfigDrift` goes to `ObservationPending` while an in-place update is in
+  progress and is re-observed immediately after it completes, so a stale
+  `ConfigDrifted` never offers the owner a second update; the `ActivationReady`
+  drift message clears once that observation finds no difference.
 - Diagnosability: `StageError` carries a bounded detail; `ActivationPending`
   and `ActivationInvalid` on a TalosConfig name the failing stage.
 - Activation record stability: the `<cluster>-talosconfig` source is pinned by
