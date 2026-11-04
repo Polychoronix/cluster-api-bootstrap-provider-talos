@@ -508,3 +508,13 @@ func TestObserveSecondKernelBootReadMustBeComplete(t *testing.T) {
 		})
 	}
 }
+
+func TestFailureDetailKeepsOnlyClientSideText(t *testing.T) {
+	require.Equal(t, "", talosclient.FailureDetail(nil))
+	require.Equal(t, "", talosclient.FailureDetail(errors.New(privateSentinel)))
+	require.Equal(t, "rpc PermissionDenied", talosclient.FailureDetail(status.Error(codes.PermissionDenied, privateSentinel)))
+	require.Equal(t, "rpc Unavailable", talosclient.FailureDetail(status.Error(codes.Unavailable, privateSentinel)))
+	dial := `connection error: desc = "transport: authentication handshake failed: tls: failed to verify certificate: x509: certificate is valid for node-1.example, not node.example"`
+	require.Equal(t, dial, talosclient.FailureDetail(status.Error(codes.Unavailable, dial)))
+	require.Equal(t, "context deadline exceeded", talosclient.FailureDetail(context.DeadlineExceeded))
+}

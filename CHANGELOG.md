@@ -1,3 +1,14 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.9
+
+- Observation failures name the member, the endpoint it was dialed through and the
+  client-side failure: `Talos management actual Talos observation failed: <machine>
+  via <address> (tls <serverName>): Talos boot identity observation failed: connection
+  error: desc = "transport: …"`. The same detail is attached to the `Talos transport`,
+  etcd observation and `API health` stages. Only client-generated text is kept (the dial
+  result of an Unavailable status: DNS, TCP, TLS handshake and certificate verification;
+  otherwise the gRPC code), server status text is never copied and upstream errors are
+  never retained as causes (`talosclient.FailureDetail`).
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.8
 
 - **Drift to converge.** Under `manage: true` live edits are not persisted: a

@@ -41,12 +41,12 @@ func ObserveConfigDrift(ctx context.Context, reader client.Reader, m *clusterv1.
 	}
 	talos, err := endpointclient.New(ctx, reader, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, *tc.Spec.TalosEndpoint)
 	if err != nil {
-		return nil, managementError("Talos transport")
+		return nil, managementErrorDetail("Talos transport", memberDetail(m, *tc.Spec.TalosEndpoint, err.Error()))
 	}
 	defer talos.Close()
 	observed, err := endpointclient.Observe(ctx, talos, *tc.Spec.TalosEndpoint)
 	if err != nil {
-		return nil, managementError("actual Talos observation")
+		return nil, managementErrorDetail("actual Talos observation", memberDetail(m, *tc.Spec.TalosEndpoint, err.Error()))
 	}
 	differing, err := managementConfigDiff(observed.Configuration, rendered)
 	if err != nil {

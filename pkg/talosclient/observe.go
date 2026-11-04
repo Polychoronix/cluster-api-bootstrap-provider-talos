@@ -55,6 +55,36 @@ func (Observation) GoString() string { return "Talos observation (redacted)" }
 // bracketed by boot identity reads. It never issues a lifecycle or mutation RPC.
 // Older Talos may lack kubelet status: absence leaves the actual image unknown,
 // never substituted from desired config or the incompatible system CRI socket.
+// FailureDetail reports what the client side knows about a failed Talos RPC, or "" when
+// nothing safe is known. Upstream errors are never retained as causes and server-provided
+// status text is never copied (it can echo private input): only the gRPC code is kept,
+// except for the client-generated connection error of an Unavailable status, whose text
+// is the dial result (DNS lookup, TCP connect, TLS handshake and certificate verification)
+// and names endpoints and certificate subjects, never credentials or configuration.
+func FailureDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	if s, ok := status.FromError(err); ok {
+		if s.Code() == codes.Unavailable && strings.HasPrefix(s.Message(), "connection error:") {
+			return s.Message()
+		}
+		return "rpc " + s.Code().String()
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded.Error()
+	}
+	return ""
+}
+
+// observationError keeps the fixed stage text and appends FailureDetail.
+func observationError(stage string, err error) error {
+	if detail := FailureDetail(err); detail != "" {
+		return errors.New(stage + ": " + detail)
+	}
+	return errors.New(stage)
+}
+
 func Observe(ctx context.Context, talos *machineryclient.Client, endpoint bootstrapv1.TalosEndpoint) (*Observation, error) {
 	if talos == nil || talos.COSI == nil {
 		return nil, errors.New("Talos observation client unavailable")
@@ -67,7 +97,7 @@ func Observe(ctx context.Context, talos *machineryclient.Client, endpoint bootst
 	observation := &Observation{BootID: boot.id}
 	active, err := safe.StateGetByID[*configresource.MachineConfig](ctx, talos.COSI, configresource.ActiveID)
 	if err != nil || active == nil || active.Provider() == nil {
-		return nil, errors.New("Talos active configuration observation failed")
+		return nil, observationError("Talos active configuration observation failed", err)
 	}
 	observation.Configuration, err = active.Provider().Bytes()
 	if err != nil || len(bytes.TrimSpace(observation.Configuration)) == 0 {
@@ -75,7 +105,7 @@ func Observe(ctx context.Context, talos *machineryclient.Client, endpoint bootst
 	}
 	version, err := safe.StateGetByID[*runtimeresource.Version](ctx, talos.COSI, "version")
 	if err != nil || version == nil || strings.TrimSpace(version.TypedSpec().Version) == "" {
-		return nil, errors.New("Talos runtime version observation failed")
+		return nil, observationError("Talos runtime version observation failed", err)
 	}
 	observation.OSVersion = version.TypedSpec().Version
 
@@ -83,13 +113,13 @@ func Observe(ctx context.Context, talos *machineryclient.Client, endpoint bootst
 	schematicMissing := state.IsNotFoundError(err)
 	if !schematicMissing {
 		if err != nil || schematic == nil || strings.TrimSpace(schematic.TypedSpec().SchematicID) == "" {
-			return nil, errors.New("Talos schematic observation failed")
+			return nil, observationError("Talos schematic observation failed", err)
 		}
 		observation.SchematicID = schematic.TypedSpec().SchematicID
 	}
 	extensions, err := talos.COSI.List(ctx, resource.NewMetadata(runtimeresource.NamespaceName, runtimeresource.ExtensionStatusType, "", resource.VersionUndefined))
 	if err != nil {
-		return nil, errors.New("Talos extension observation failed")
+		return nil, observationError("Talos extension observation failed", err)
 	}
 	seen := make(map[string]struct{}, len(extensions.Items))
 	virtualID := ""
@@ -127,7 +157,7 @@ func Observe(ctx context.Context, talos *machineryclient.Client, endpoint bootst
 
 	kubelets, err := talos.COSI.List(ctx, resource.NewMetadata(k8sresource.NamespaceName, k8sresource.KubeletStatusType, "", resource.VersionUndefined))
 	if err != nil && !state.IsNotFoundError(err) && status.Code(err) != codes.NotFound || len(kubelets.Items) > 1 {
-		return nil, errors.New("Talos kubelet runtime observation failed")
+		return nil, observationError("Talos kubelet runtime observation failed", err)
 	}
 	if len(kubelets.Items) == 1 {
 		kubelet, ok := kubelets.Items[0].(*k8sresource.KubeletStatus)
@@ -165,7 +195,7 @@ func observeBoot(ctx context.Context, talos *machineryclient.Client, kernel bool
 		boot, err := safe.StateGetByID[*runtimeresource.BootID](ctx, talos.COSI, runtimeresource.BootIDID)
 		if !state.IsNotFoundError(err) {
 			if err != nil || boot == nil || strings.TrimSpace(boot.TypedSpec().BootID) == "" {
-				return observedBoot{}, errors.New("Talos boot identity observation failed")
+				return observedBoot{}, observationError("Talos boot identity observation failed", err)
 			}
 			return observedBoot{id: boot.TypedSpec().BootID}, nil
 		}
@@ -177,7 +207,7 @@ func observeBoot(ctx context.Context, talos *machineryclient.Client, kernel bool
 	defer cancel()
 	stream, err := talos.MachineClient.Read(readCtx, &machineapi.ReadRequest{Path: "/proc/sys/kernel/random/boot_id"})
 	if err != nil {
-		return observedBoot{}, errors.New("Talos kernel boot identity observation failed")
+		return observedBoot{}, observationError("Talos kernel boot identity observation failed", err)
 	}
 	// A canonical kernel UUID plus newline is 37 bytes. Read through EOF,
 	// rejecting oversized/truncated streams and both modern and legacy errors.
@@ -189,7 +219,7 @@ func observeBoot(ctx context.Context, talos *machineryclient.Client, kernel bool
 			break
 		}
 		if receiveErr != nil || chunk == nil {
-			return observedBoot{}, errors.New("Talos kernel boot identity observation failed")
+			return observedBoot{}, observationError("Talos kernel boot identity observation failed", receiveErr)
 		}
 		md := chunk.GetMetadata()
 		if md != nil && (md.GetError() != "" || md.GetStatus().GetCode() != 0) || len(chunk.GetBytes()) > len(data)-n {

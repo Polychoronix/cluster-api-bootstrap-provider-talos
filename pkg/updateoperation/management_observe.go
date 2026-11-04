@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"sort"
@@ -259,12 +260,12 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		}
 		talos, e := endpointclient.New(ctx, reader, client.ObjectKey{Namespace: a.Namespace, Name: cluster.Name}, *normalized.Spec.TalosEndpoint)
 		if e != nil {
-			return nil, managementError("Talos transport")
+			return nil, managementErrorDetail("Talos transport", memberDetail(m, *normalized.Spec.TalosEndpoint, e.Error()))
 		}
 		observed, e := endpointclient.Observe(ctx, talos, *normalized.Spec.TalosEndpoint)
 		if e != nil {
 			talos.Close()
-			return nil, managementError("actual Talos observation")
+			return nil, managementErrorDetail("actual Talos observation", memberDetail(m, *normalized.Spec.TalosEndpoint, e.Error()))
 		}
 		actual, e := managementConfigBytes(observed.Configuration)
 		if e != nil {
@@ -340,6 +341,10 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 			view, self, e := managementEtcd(ctx, talos, *normalized.Spec.TalosEndpoint, m, node)
 			if e != nil {
 				talos.Close()
+				var stage *StageError
+				if errors.As(e, &stage) && stage.Detail == "" {
+					e = managementErrorDetail(stage.Stage, memberDetail(m, *normalized.Spec.TalosEndpoint, ""))
+				}
 				return nil, e
 			}
 			if o.safety.Etcd == nil {
@@ -408,11 +413,11 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		}
 		response, e := hc.Do(req)
 		if e != nil {
-			return nil, managementError("API health")
+			return nil, managementErrorDetail("API health", e.Error())
 		}
 		response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return nil, managementError("API health")
+			return nil, managementErrorDetail("API health", cfg.Host+"/readyz: "+response.Status)
 		}
 		o.summary.EtcdHealthy = true
 	}
@@ -549,15 +554,31 @@ func managementConfigBytes(data []byte) ([]byte, error) {
 	return b, nil
 }
 
+// memberDetail names the Machine and the Talos endpoint it was observed through, plus
+// an optional failure detail. Endpoint address and TLS server name are the TalosConfig's
+// own spec; callers pass either an error from the observation package (already reduced
+// to client-side detail) or endpointclient.FailureDetail of a raw RPC error, never
+// server status text.
+func memberDetail(m *clusterv1.Machine, endpoint bootstrapv1.TalosEndpoint, detail string) string {
+	out := m.Name + " via " + endpoint.Address
+	if endpoint.ServerName != "" && endpoint.ServerName != endpoint.Address {
+		out += " (tls " + endpoint.ServerName + ")"
+	}
+	if detail != "" {
+		out += ": " + detail
+	}
+	return out
+}
+
 func managementEtcd(ctx context.Context, c *machineryclient.Client, endpoint bootstrapv1.TalosEndpoint, m *clusterv1.Machine, n *corev1.Node) ([]managementEtcdMember, managementEtcdMember, error) {
 	ctx = endpointclient.WithNode(ctx, endpoint)
 	members, e := c.EtcdMemberList(ctx, &machineapi.EtcdMemberListRequest{})
 	if e != nil || len(members.GetMessages()) != 1 || members.Messages[0] == nil || managementMetadataFailed(members.Messages[0].Metadata) {
-		return nil, managementEtcdMember{}, managementError("etcd member observation")
+		return nil, managementEtcdMember{}, managementErrorDetail("etcd member observation", memberDetail(m, endpoint, endpointclient.FailureDetail(e)))
 	}
 	status, e := c.EtcdStatus(ctx)
 	if e != nil || len(status.GetMessages()) != 1 || status.Messages[0] == nil || managementMetadataFailed(status.Messages[0].Metadata) || status.Messages[0].MemberStatus == nil {
-		return nil, managementEtcdMember{}, managementError("etcd status observation")
+		return nil, managementEtcdMember{}, managementErrorDetail("etcd status observation", memberDetail(m, endpoint, endpointclient.FailureDetail(e)))
 	}
 	state := status.Messages[0].MemberStatus
 	if state.MemberId == 0 || state.Leader == 0 || state.IsLearner || len(state.Errors) != 0 || state.RaftTerm == 0 || state.RaftAppliedIndex == 0 {
@@ -565,7 +586,7 @@ func managementEtcd(ctx context.Context, c *machineryclient.Client, endpoint boo
 	}
 	services, e := c.ServiceInfo(ctx, "etcd")
 	if e != nil || len(services) != 1 || managementMetadataFailed(services[0].Metadata) || services[0].Service == nil || services[0].Service.Health == nil || !services[0].Service.Health.Healthy || services[0].Service.Health.Unknown {
-		return nil, managementEtcdMember{}, managementError("etcd service health")
+		return nil, managementEtcdMember{}, managementErrorDetail("etcd service health", memberDetail(m, endpoint, endpointclient.FailureDetail(e)))
 	}
 	ids := map[uint64]bool{}
 	names := map[string]bool{}
