@@ -443,6 +443,8 @@ As part of its operation, CABPT sets a number of Conditions on the `TalosConfig/
 
 - `DataSecretAvailable`: CABPT generated machine configuration in `<machine>-bootstrap-data` Secret, CABPT unblocks infrastructure provider to boot the `Machine`.
 - `ClientConfigAvailableCondition`: CABPT generated Talos client configuration in `<cluster>-talosconfig` Secret.
+- `ActivationReady`: the node was observed and matches its authority's policy (`manage: true`). A `TalosControlPlane` authority's policy for a Machine is its shared `controlplane` spec plus the overlay of the `spec.controlPlaneConfig.members` entry the Machine occupies (its `controlplane.cluster.x-k8s.io/member` label, else its name). A node that still runs its own `TalosConfig`'s render while the policy has moved on is activated with a message saying so; the owner's in-place update then converges it.
+- `ConfigDrift`: for an activated `TalosConfig`, whether the node's live machine configuration still equals the `TalosConfig`'s current render, compared document by document (order-insensitive). Observed every `--config-drift-check-interval` (default `30m`, `0` disables), reported only (`ConfigDrifted` with the differing `apiVersion/kind[/name]` list, `NoDrift`, or `ObservationPending` when the node could not be dialed); nothing is ever applied from this path.
 
 ```shell
 $ kubectl describe talosconfig talosconfig-cp-0

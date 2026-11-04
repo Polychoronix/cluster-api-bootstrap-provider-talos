@@ -1,3 +1,24 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.6
+
+- Activation policy understands `TalosControlPlane.spec.controlPlaneConfig.members`
+  (CACPPT craci.5): the live authority policy for a Machine is the shared
+  `controlplane` spec plus the overlay of the member it occupies (member label,
+  else Machine name), merged exactly as CACPPT's `EffectiveTalosConfigSpec`
+  does (a contract test pins the mirror). Before, every member Machine failed
+  observation with `effective input differs from live authority policy` and a
+  control plane with members could never (re-)activate.
+- Baseline tolerance: observation accepts a node whose live configuration
+  matches the Machine's **current** `TalosConfig` render when it no longer
+  matches the effective policy (the state an in-place update starts from). The
+  activation snapshot records which rendering matched; `ActivationReady` on a
+  control-plane child carries a message when the current render matched.
+  Configurations are compared document by document (order-insensitive), so a
+  live `talosctl patch` that appended documents no longer counts as a mismatch.
+- Report-only configuration drift: activated `TalosConfig`s are re-observed on
+  `--config-drift-check-interval` (default 30m, 0 disables) and carry a
+  `ConfigDrift` condition (`ConfigDrifted` with differing document identities,
+  `NoDrift`, `ObservationPending`). Nothing is applied from this path.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.5
 
 - Observation failures are diagnosable: `ActivationReady=False` now carries the
