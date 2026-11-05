@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"time"
 
 	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
@@ -28,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -121,12 +119,11 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 	if reader.Get(ctx, client.ObjectKey{Namespace: a.Namespace, Name: cluster.Name + "-kubeconfig"}, kubeSecret) != nil || kubeSecret.UID == "" {
 		return nil, managementError("workload identity")
 	}
-	cfg, e := clientcmd.RESTConfigFromKubeConfig(kubeSecret.Data["value"])
+	cfg, e := WorkloadRESTConfig(kubeSecret.Data["value"])
 	if e != nil {
 		return nil, managementError("workload identity parse")
 	}
-	cfg.Timeout = 5 * time.Second
-	workload, e := client.New(cfg, client.Options{})
+	workloadNodes, e := WorkloadNodes(cfg)
 	if e != nil {
 		return nil, managementError("workload client")
 	}
@@ -177,9 +174,13 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if !m.Status.NodeRef.IsDefined() || m.Spec.ProviderID == "" || !m.Spec.Bootstrap.ConfigRef.IsDefined() || m.Spec.Bootstrap.DataSecretName == nil || *m.Spec.Bootstrap.DataSecretName == "" {
 			return nil, managementError("Machine association incomplete")
 		}
-		node := &corev1.Node{}
-		if err := workload.Get(ctx, client.ObjectKey{Name: m.Status.NodeRef.Name}, node); err != nil {
-			return nil, managementError("workload Node lookup")
+		node, err := workloadNodes.Get(ctx, m.Status.NodeRef.Name, metav1.GetOptions{})
+		if err != nil {
+			detail, notFound := WorkloadFailure(err)
+			if notFound {
+				return nil, managementErrorDetail("workload Node identity", m.Status.NodeRef.Name+": "+detail)
+			}
+			return nil, workloadUnavailable("workload Node lookup", m.Status.NodeRef.Name+": "+detail)
 		}
 		if node.UID == "" || nodeIDs[node.UID] || node.Spec.ProviderID != m.Spec.ProviderID || !node.DeletionTimestamp.IsZero() {
 			return nil, managementError("workload Node identity")
@@ -394,9 +395,10 @@ func ObserveManagement(ctx context.Context, reader client.Reader, request Manage
 		if len(etcdNodes) != len(o.safety.Etcd) {
 			return nil, managementError("unaccounted control-plane Node")
 		}
-		nodes := &corev1.NodeList{}
-		if workload.List(ctx, nodes, client.MatchingLabels{"node-role.kubernetes.io/control-plane": ""}) != nil {
-			return nil, managementError("complete control-plane Node inventory")
+		nodes, err := workloadNodes.List(ctx, metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/control-plane="})
+		if err != nil {
+			detail, _ := WorkloadFailure(err)
+			return nil, workloadUnavailable("complete control-plane Node inventory", detail)
 		}
 		for _, n := range nodes.Items {
 			if !nodeIDs[n.UID] {

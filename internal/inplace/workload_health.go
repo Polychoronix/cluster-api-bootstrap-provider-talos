@@ -11,8 +11,8 @@ import (
 	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"net/http"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,30 +21,37 @@ import (
 	"time"
 )
 
-func (h *Handler) workloadClient(ctx context.Context, cluster *clusterv1.Cluster) (client.Client, *rest.Config, error) {
+func (h *Handler) workloadConfig(ctx context.Context, cluster *clusterv1.Cluster) (*rest.Config, error) {
 	s := &corev1.Secret{}
 	if h.reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name + "-kubeconfig"}, s) != nil {
-		return nil, nil, fmt.Errorf("operation workload credentials unavailable")
+		return nil, fmt.Errorf("operation workload credentials unavailable")
 	}
-	cfg, e := clientcmd.RESTConfigFromKubeConfig(s.Data["value"])
+	cfg, e := op.WorkloadRESTConfig(s.Data["value"])
 	if e != nil {
-		return nil, nil, fmt.Errorf("operation workload credentials invalid")
+		return nil, fmt.Errorf("operation workload credentials invalid")
 	}
-	cfg.Timeout = 5 * time.Second
-	c, e := client.New(cfg, client.Options{})
-	if e != nil {
-		return nil, nil, fmt.Errorf("operation workload client failed")
-	}
-	return c, cfg, nil
+	return cfg, nil
 }
+
+// workloadNode reads one Node in a single request. A failed read that says nothing about
+// the Node (timeout, transport, API status other than NotFound) wraps
+// op.ErrWorkloadUnavailable so callers wait instead of declaring an identity change.
 func (h *Handler) workloadNode(ctx context.Context, cluster *clusterv1.Cluster, name string) (*corev1.Node, error) {
-	c, _, e := h.workloadClient(ctx, cluster)
+	cfg, e := h.workloadConfig(ctx, cluster)
 	if e != nil {
 		return nil, e
 	}
-	n := &corev1.Node{}
-	if c.Get(ctx, client.ObjectKey{Name: name}, n) != nil {
-		return nil, fmt.Errorf("operation workload Node observation failed")
+	nodes, e := op.WorkloadNodes(cfg)
+	if e != nil {
+		return nil, fmt.Errorf("operation workload client failed")
+	}
+	n, e := nodes.Get(ctx, name, metav1.GetOptions{})
+	if e != nil {
+		detail, notFound := op.WorkloadFailure(e)
+		if notFound {
+			return nil, fmt.Errorf("operation workload Node %s not found", name)
+		}
+		return nil, fmt.Errorf("operation workload Node observation failed: %s: %s: %w", name, detail, op.ErrWorkloadUnavailable)
 	}
 	return n, nil
 }
@@ -127,7 +134,7 @@ func (h *Handler) controlPlaneObservation(ctx context.Context, cluster *clusterv
 	if strings.Join(expected, "\x00") != strings.Join(actual, "\x00") {
 		return nil, fmt.Errorf("operation etcd membership differs from expected inventory")
 	}
-	_, cfg, err := h.workloadClient(ctx, cluster)
+	cfg, err := h.workloadConfig(ctx, cluster)
 	if err != nil {
 		return nil, err
 	}

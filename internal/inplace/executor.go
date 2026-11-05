@@ -27,6 +27,12 @@ const operationDeadline = 30 * time.Minute
 func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMachineRequest, resp *runtimehooks.UpdateMachineResponse) error {
 	s, ready, err := h.snapshot(ctx, &req.Desired.Machine, req.Desired.BootstrapConfig)
 	if err != nil {
+		// An unreachable workload API says nothing about the transaction: wait for it
+		// rather than judging the pending journal stale.
+		if errors.Is(err, op.ErrWorkloadUnavailable) {
+			respondRetry(resp, "waiting for the workload API: "+err.Error())
+			return nil
+		}
 		if !errors.Is(err, op.ErrManagementPaused) {
 			if pendingErr := h.rejectStalePending(ctx, &req.Desired.Machine); pendingErr != nil {
 				return errors.Join(err, pendingErr)
@@ -94,6 +100,10 @@ func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMac
 		return nil
 	}
 	if err := h.guard(ctx, s, j); err != nil {
+		if errors.Is(err, op.ErrWorkloadUnavailable) {
+			respondRetry(resp, "waiting for the workload API: "+err.Error())
+			return nil
+		}
 		return h.ambiguous(ctx, secret, j, err)
 	}
 	if j.Phase == op.Ambiguous {
@@ -124,6 +134,10 @@ func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMac
 			}
 			if step.Kind == op.Apply || step.Kind == op.Install || step.Kind == op.Reboot {
 				workload, err := h.workloadNode(ctx, s.cluster, j.NodeName)
+				if errors.Is(err, op.ErrWorkloadUnavailable) {
+					respondRetry(resp, "waiting for the workload API before operation issuance")
+					return nil
+				}
 				if err != nil || workload.UID != j.NodeUID || workload.Spec.ProviderID != j.NodeProviderID {
 					return fmt.Errorf("operation preflight workload identity unavailable")
 				}
@@ -249,12 +263,33 @@ func (h *Handler) ambiguous(ctx context.Context, s *corev1.Secret, j *op.Journal
 	}
 	return fmt.Errorf("operation ambiguous; intervention required")
 }
+
+// guardIssuedWaiting re-runs guardIssued while the workload API is unavailable, bounded
+// by the step deadline: unavailability says nothing about the frozen identities, and a
+// control-plane reboot routinely makes the workload API briefly unreachable.
+func (h *Handler) guardIssuedWaiting(ctx context.Context, namespace string, j *op.Journal) error {
+	for {
+		err := h.guardIssued(ctx, namespace, j)
+		if err == nil || !errors.Is(err, op.ErrWorkloadUnavailable) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(workloadRetryInterval):
+		}
+	}
+}
+
+// workloadRetryInterval spaces guardIssuedWaiting attempts.
+var workloadRetryInterval = 5 * time.Second
+
 func (h *Handler) runStep(lifetime context.Context, namespace, cluster string, j *op.Journal, index int) {
 	step := j.Steps[index]
 	ctx, cancel := context.WithDeadline(lifetime, step.Deadline.Time)
 	defer cancel()
 	var node OperationNode
-	err := h.guardIssued(ctx, namespace, j)
+	err := h.guardIssuedWaiting(ctx, namespace, j)
 	if err == nil {
 		node, err = h.newNodeClient(ctx, client.ObjectKey{Namespace: namespace, Name: cluster}, j.Endpoint)
 	}
@@ -290,7 +325,7 @@ func (h *Handler) runStep(lifetime context.Context, namespace, cluster string, j
 		node.Close()
 	}
 	if err == nil {
-		err = h.guardIssued(ctx, namespace, j)
+		err = h.guardIssuedWaiting(ctx, namespace, j)
 	}
 	persistCtx, c := context.WithTimeout(context.WithoutCancel(lifetime), 5*time.Second)
 	defer c()

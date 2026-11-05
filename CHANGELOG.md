@@ -12,6 +12,23 @@
   discarded the same way. `Ambiguous` is kept for transactions with an issued step
   whose outcome cannot be verified. docs/in-place-updates.md describes the manual
   clearing sequence for that genuinely ambiguous case.
+- A slow or unreachable workload API is waited out, never reported as a changed Node.
+  Every workload Node read (activation validation, management observation, the
+  in-place executor) used a 5s per-request timeout and a controller-runtime client
+  that runs API discovery (`/api`, `/apis`, `/api/v1`) before the read; through the
+  tailnet API proxy this timed out (`context deadline exceeded while reading body`).
+  The activation check then reported `activated workload Node identity changed` for
+  what was a failed lookup, and the executor `operation workload Node observation
+  failed`; inside an issued transaction the guard turned it into a terminal
+  `Ambiguous`. Now: one typed Node request without discovery; a new
+  `--workload-api-timeout` (default `15s`, was a fixed 5s); a failed lookup is
+  `activated workload Node lookup failed: <node>: timed out (limit 15s)` /
+  `API status 503 ServiceUnavailable` / `transport error`, wraps
+  `ErrWorkloadUnavailable`, and makes `UpdateMachine` answer "waiting for the workload
+  API" (no stale-journal judgement, no ambiguity); the issuing runner's pre- and
+  post-RPC guards retry until the step deadline. `identity changed` is kept for a Node
+  that is gone or has another UID/providerID and now names it (`<node>: UID a -> b`).
+  CACPPT runs this package in-process and picks up the default on its next CABPT bump.
 
 ## Unreleased CRACI integration changes — v0.9.0-craci.10
 

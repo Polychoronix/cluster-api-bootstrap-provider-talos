@@ -5,30 +5,42 @@ package updateoperation
 
 import (
 	"context"
+
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/configinput"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/clientcmd"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"time"
 )
 
+// validateManagementNode checks the member's live workload Node against the activated
+// snapshot. A failed lookup is unavailability (ErrWorkloadUnavailable), never reported as
+// a changed identity; only a Node that is gone or carries another UID/providerID is.
 func validateManagementNode(ctx context.Context, reader client.Reader, safety *managementSafety, member *managementMember) error {
 	secret := &corev1.Secret{}
 	if reader.Get(ctx, client.ObjectKey{Namespace: safety.Authority.Namespace, Name: safety.ClusterName + "-kubeconfig"}, secret) != nil {
 		return managementError("activated workload credentials")
 	}
-	config, err := clientcmd.RESTConfigFromKubeConfig(secret.Data["value"])
+	config, err := WorkloadRESTConfig(secret.Data["value"])
 	if err != nil {
 		return managementError("activated workload credentials parse")
 	}
-	config.Timeout = 5 * time.Second
-	workload, err := client.New(config, client.Options{})
+	nodes, err := WorkloadNodes(config)
 	if err != nil {
 		return managementError("activated workload client")
 	}
-	node := &corev1.Node{}
-	if workload.Get(ctx, client.ObjectKey{Name: member.NodeName}, node) != nil || node.UID != member.NodeUID || node.Spec.ProviderID != member.ProviderID {
-		return managementError("activated workload Node identity changed")
+	node, err := nodes.Get(ctx, member.NodeName, metav1.GetOptions{})
+	if err != nil {
+		detail, notFound := WorkloadFailure(err)
+		if notFound {
+			return managementErrorDetail("activated workload Node identity changed", member.NodeName+": "+detail)
+		}
+		return workloadUnavailable("activated workload Node lookup", member.NodeName+": "+detail)
+	}
+	if node.UID != member.NodeUID {
+		return managementErrorDetail("activated workload Node identity changed", member.NodeName+": UID "+string(member.NodeUID)+" -> "+string(node.UID))
+	}
+	if node.Spec.ProviderID != member.ProviderID {
+		return managementErrorDetail("activated workload Node identity changed", member.NodeName+": providerID "+member.ProviderID+" -> "+node.Spec.ProviderID)
 	}
 	// Readiness and expected deletion are lifecycle state, not revoked identity.
 	// Issuance preflight/recovery owns those health gates; a rebooting same-UID

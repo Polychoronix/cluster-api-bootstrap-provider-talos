@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -113,6 +114,8 @@ type durableFixture struct {
 	seed         *corev1.Secret
 	seedSpec     bootstrapv1.TalosConfigSpec
 	workloadNode *corev1.Node
+	// workloadDown makes the fake workload API answer 503 for Node reads.
+	workloadDown *atomic.Bool
 }
 
 type uidAssigningClient struct{ client.Client }
@@ -143,8 +146,14 @@ func newDurableFixture(t *testing.T, imageChanged bool) *durableFixture {
 	require.NoError(t, err)
 	generation := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "cluster-talos", UID: "bundle-uid"}, Data: map[string][]byte{"bundle": encoded}}
 	workload := &corev1.Node{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Node"}, ObjectMeta: metav1.ObjectMeta{Name: "node", UID: "node-uid"}, Spec: corev1.NodeSpec{ProviderID: m.Spec.ProviderID}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: m.Spec.Version}, Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}}
+	workloadDown := &atomic.Bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if workloadDown.Load() && strings.HasPrefix(r.URL.Path, "/api/v1/nodes") {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: metav1.StatusFailure, Reason: metav1.StatusReasonServiceUnavailable, Code: http.StatusServiceUnavailable})
+			return
+		}
 		switch r.URL.Path {
 		case "/api":
 			json.NewEncoder(w).Encode(metav1.APIVersions{TypeMeta: metav1.TypeMeta{Kind: "APIVersions", APIVersion: "v1"}, Versions: []string{"v1"}})
@@ -217,7 +226,7 @@ func newDurableFixture(t *testing.T, imageChanged bool) *durableFixture {
 		return handler.runner.ctx != nil
 	}, time.Second, time.Millisecond)
 	request := &runtimehooks.UpdateMachineRequest{Desired: runtimehooks.UpdateMachineRequestObjects{Machine: *m.DeepCopy(), BootstrapConfig: runtime.RawExtension{Object: cfg.DeepCopy()}}}
-	fixture := &durableFixture{handler: handler, management: management, node: node, request: request, config: cfg, machine: m, cluster: cluster, output: output, seed: seed, seedSpec: seedSpec, workloadNode: workload}
+	fixture := &durableFixture{handler: handler, management: management, node: node, request: request, config: cfg, machine: m, cluster: cluster, output: output, seed: seed, seedSpec: seedSpec, workloadNode: workload, workloadDown: workloadDown}
 	activateDurableFixture(t, fixture)
 	return fixture
 }

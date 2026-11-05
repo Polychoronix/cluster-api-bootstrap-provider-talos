@@ -176,7 +176,12 @@ type managementRecord struct {
 type StageError struct {
 	Stage  string
 	Detail string
+	// cause is a package sentinel (ErrWorkloadUnavailable), never an upstream error.
+	cause error
 }
+
+// Unwrap exposes the package sentinel classifying the failure, if any.
+func (e *StageError) Unwrap() error { return e.cause }
 
 func (e *StageError) Error() string {
 	if e.Detail != "" {

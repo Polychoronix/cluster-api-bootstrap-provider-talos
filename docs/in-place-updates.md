@@ -204,6 +204,11 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
    `Planned`) has had no effect on the node: any failure before issuance discards
    it and the next poll plans afresh from current inputs. Journals left `Ambiguous`
    with only `Planned` steps by earlier releases are discarded the same way.
+   An unreachable workload API (timeout, transport, API status other than NotFound;
+   per request `--workload-api-timeout`, default 15s) is never a changed identity:
+   the hook answers "waiting for the workload API" and the issuing runner's guard
+   retries until the step deadline. Only a Node that is gone or carries another
+   UID/providerID is `activated workload Node identity changed`.
 6. Apply acknowledgment is not completion: verify actual active full configuration,
    target OS/kubelet versions, preserved Node UID/providerID and Node Ready. A chosen
    reboot additionally requires a changed kernel BootID. Installer updates bind a
