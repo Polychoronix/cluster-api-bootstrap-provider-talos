@@ -283,11 +283,13 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 	}
 	activated := err == nil && r.Activated
 	if activated {
-		approved := managementSafety{}
-		if json.Unmarshal(previous, &approved) != nil {
+		// Both sides go through the same JSON decoding so encoding artefacts (a nil
+		// RawMessage stored as null) never read as a change.
+		approved, observed := managementSafety{}, managementSafety{}
+		if json.Unmarshal(previous, &approved) != nil || json.Unmarshal(payload, &observed) != nil {
 			return nil, managementErrorDetail("activated safety snapshot changed", "activated snapshot decode")
 		}
-		identity, lifecycle := managementSnapshotDelta(approved, o.safety)
+		identity, lifecycle := managementSnapshotDelta(approved, observed)
 		if len(identity) > 0 {
 			return nil, managementErrorDetail("activated safety snapshot changed", strings.Join(identity, "; "))
 		}
