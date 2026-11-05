@@ -138,3 +138,29 @@ func TestManagementSnapshotDeltaNamesEtcdRejoin(t *testing.T) {
 	require.Empty(t, identity)
 	require.Equal(t, []string{"etcd tiikerinpentu: member aaaa -> 71c1e0b889b65175"}, lifecycle)
 }
+
+// A TalosControlPlane spec edit while an in-place transaction is in flight (the owner
+// writes the desired TalosConfig spec before the node converges) is re-verified intent:
+// the activated snapshot is replaced, never fail-closed.
+func TestActivatedSnapshotFollowsAuthorityPolicyChange(t *testing.T) {
+	c, a, o, approved := activatedResnapshotFixture(t)
+	approvedSafety := o.safety
+	approvedSafety.Members = append([]managementMember(nil), o.safety.Members...)
+	o.safety.Members = append([]managementMember(nil), o.safety.Members...)
+	o.safety.AuthoritySpec = json.RawMessage(`{"machineTemplate":{"spec":{"deletion":{"nodeDeletionTimeoutSeconds":10}}}}`)
+	o.safety.Members[0].ConfigSpec = json.RawMessage(`{"generateType":"controlplane","talosVersion":"v1.14.2"}`)
+	o.safety.Members[0].EffectiveSpec = o.safety.Members[0].ConfigSpec
+	o.safety.Members[0].Baseline = BaselineCurrent
+
+	identity, lifecycle := managementSnapshotDelta(approvedSafety, o.safety)
+	require.Empty(t, identity)
+	require.Equal(t, []string{"authority policy", "tiikerinpentu: intent or baseline"}, lifecycle)
+
+	status, err := RecordManagementObservation(t.Context(), c, c, o)
+	require.NoError(t, err)
+	require.True(t, status.Activated)
+	_, record, _, err := readManagement(t.Context(), c, a)
+	require.NoError(t, err)
+	require.NotEqual(t, approved.ObservationID, record.ObservationID)
+	require.Equal(t, approved.AcceptedImages, record.AcceptedImages)
+}
