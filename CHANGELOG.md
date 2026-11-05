@@ -1,4 +1,4 @@
-## Unreleased CRACI integration changes — v0.9.0-craci.11
+## CRACI integration changes — v0.9.0-craci.11
 
 - An in-place operation that was never issued is never terminal. Any failure before
   the first step reached the node (the request no longer validating against the
