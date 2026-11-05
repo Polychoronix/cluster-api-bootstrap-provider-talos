@@ -127,8 +127,15 @@ func TestRecreatedSameNameNodeNeverCompletes(t *testing.T) {
 	response := &runtimehooks.UpdateMachineResponse{}
 	f.handler.DoUpdateMachine(t.Context(), f.request, response)
 	require.Equal(t, runtimehooks.ResponseStatusFailure, response.Status)
-	_, j := f.journal(t)
-	require.Equal(t, op.Ambiguous, j.Phase)
+	// Nothing was issued, so the planned journal is discarded rather than left Ambiguous;
+	// the replaced Node still never completes the operation.
+	require.True(t, journalAbsent(t, f))
+	for range 3 {
+		f.handler.DoUpdateMachine(t.Context(), f.request, &runtimehooks.UpdateMachineResponse{})
+	}
+	f.node.mu.Lock()
+	defer f.node.mu.Unlock()
+	require.Zero(t, f.node.applyCount)
 }
 func TestCAPISeedWithoutActivationStopsBeforeApply(t *testing.T) {
 	f := newDurableFixture(t, false)

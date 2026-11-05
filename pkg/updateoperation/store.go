@@ -183,3 +183,37 @@ func PatchData(ctx context.Context, c client.Client, s *corev1.Secret, next map[
 	}
 	return nil
 }
+
+// Unissued reports whether no step of j was ever issued to the node: every step is
+// still Planned and carries no issuance witness. Such a journal has had no effect on
+// the node, so a failure before issuance is never an ambiguous outcome.
+func Unissued(j *Journal) bool {
+	if j == nil || len(j.Steps) == 0 {
+		return false
+	}
+	for _, s := range j.Steps {
+		if s.Phase != StepPlanned || s.IssuedAt != nil || s.IssuerID != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// DiscardUnissuedJournal deletes a journal none of whose steps was issued, so the next
+// UpdateMachine call plans afresh from current inputs. The stored journal (not the
+// caller's copy) must be unissued and unreceipted; deletion is guarded by UID and
+// resourceVersion, so a concurrent issuance (a CAS write) makes it fail instead.
+func DiscardUnissuedJournal(ctx context.Context, c client.Client, s *corev1.Secret, transactionID string) error {
+	if s == nil || s.UID == "" || s.ResourceVersion == "" {
+		return safe("unissued journal identity")
+	}
+	stored := &Journal{}
+	if json.Unmarshal(s.Data[JournalKey], stored) != nil || !validateOwner(s, stored.TalosConfig) || stored.TransactionID != transactionID || len(s.Data[ReceiptKey]) > 0 || !Unissued(stored) {
+		return safe("unissued journal discard")
+	}
+	uid, version := s.UID, s.ResourceVersion
+	if c.Delete(ctx, s.DeepCopy(), client.Preconditions{UID: &uid, ResourceVersion: &version}) != nil {
+		return safe("unissued journal delete conflict")
+	}
+	return nil
+}

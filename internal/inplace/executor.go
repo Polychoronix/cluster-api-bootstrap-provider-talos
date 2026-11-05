@@ -97,6 +97,11 @@ func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMac
 		return h.ambiguous(ctx, secret, j, err)
 	}
 	if j.Phase == op.Ambiguous {
+		// Journals marked Ambiguous before any step was issued (craci.10 and earlier did so
+		// on any failure ahead of issuance) had no effect on the node: discard and re-plan.
+		if op.Unissued(j) {
+			return h.ambiguous(ctx, secret, j, fmt.Errorf("operation was marked ambiguous before issuance"))
+		}
 		return fmt.Errorf("operation outcome ambiguous; intervention required")
 	}
 	if j.Phase == op.Observed {
@@ -221,7 +226,18 @@ func validateKubeTransitionFromNode(ctx context.Context, h *Handler, s *operatio
 	}
 	return validateKubeTransition(n.Status.NodeInfo.KubeletVersion, j.TargetKubernetesVersion)
 }
+
+// ambiguous stops a transaction whose effect on the node cannot be verified. A journal
+// none of whose steps was issued has had no effect, so it is discarded instead and the
+// next UpdateMachine call plans afresh: the failure stays retryable, never terminal.
 func (h *Handler) ambiguous(ctx context.Context, s *corev1.Secret, j *op.Journal, cause error) error {
+	if op.Unissued(j) {
+		if err := op.DiscardUnissuedJournal(ctx, h.client, s, j.TransactionID); err != nil {
+			return errors.Join(cause, err)
+		}
+		ctrl.LoggerFrom(ctx).Info("discarded an in-place operation that was never issued; it is re-planned on the next call", "talosConfig", j.TalosConfig.Name, "transactionID", j.TransactionID, "cause", cause.Error())
+		return fmt.Errorf("operation not issued and discarded, re-planned on retry: %w", cause)
+	}
 	j.Phase = op.Ambiguous
 	for i := range j.Steps {
 		if j.Steps[i].Phase == op.Issued {

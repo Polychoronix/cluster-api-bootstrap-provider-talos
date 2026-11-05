@@ -1,3 +1,18 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.11
+
+- An in-place operation that was never issued is never terminal. Any failure before
+  the first step reached the node (the request no longer validating against the
+  activated management record, stale frozen inputs, a replaced Node) used to mark
+  the planned journal `Ambiguous`, and `UpdateMachine` then answered `operation
+  outcome ambiguous; intervention required` forever although nothing had been
+  applied (seen live after a management record was re-created mid-transaction).
+  A journal whose steps are all still `Planned` is now discarded (UID and
+  resourceVersion guarded, so a concurrent issuance wins) and the next poll plans
+  afresh; journals left `Ambiguous` with only `Planned` steps by earlier releases are
+  discarded the same way. `Ambiguous` is kept for transactions with an issued step
+  whose outcome cannot be verified. docs/in-place-updates.md describes the manual
+  clearing sequence for that genuinely ambiguous case.
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.10
 
 - An activated management record follows node lifecycle instead of wedging. Before,

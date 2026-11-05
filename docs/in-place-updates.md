@@ -199,7 +199,11 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
    journal before every mutating RPC. A manager-owned bounded runner outlives the
    hook HTTP request; concurrent polls never reissue an `Issued` operation. Unknown
    responses, lost durable acknowledgments, changed inputs/identities or expired
-   recovery deadlines stop for intervention rather than retry or replacement.
+   recovery deadlines after a step was issued stop for intervention rather than
+   retry or replacement. A journal none of whose steps was issued (every step still
+   `Planned`) has had no effect on the node: any failure before issuance discards
+   it and the next poll plans afresh from current inputs. Journals left `Ambiguous`
+   with only `Planned` steps by earlier releases are discarded the same way.
 6. Apply acknowledgment is not completion: verify actual active full configuration,
    target OS/kubelet versions, preserved Node UID/providerID and Node Ready. A chosen
    reboot additionally requires a changed kernel BootID. Installer updates bind a
@@ -222,6 +226,34 @@ Finalization rechecks uncached objects/owners/sources after recovery and require
 the exact frozen output UID, configuration and private freshness before advancing
 accepted intent or publishing a receipt. Source changes after issuance stop for
 intervention; initial or consumed next-generation rendering waits safely.
+
+### Clearing a genuinely ambiguous transaction
+
+`UpdateMachine` answering `operation outcome ambiguous; intervention required` (or
+`operation step ambiguous`) means a step reached the node and its outcome could not
+be verified. First establish what the node actually runs (`talosctl get mc`,
+`talosctl version`, Node Ready, etcd membership for a control plane) and decide
+whether the change landed. Then, with the owning TalosControlPlane (or Machine) paused
+via `cluster.x-k8s.io/paused`, clear the transaction in this order (namespace of the
+Machine; `<tc>` is the Machine's TalosConfig, `<infra>` its InfraMachine):
+
+```sh
+# 1. Inspect the journal: phase and step phases; keep it if phase is Observed.
+kubectl -n <ns> get secret <tc>-update-operation -o jsonpath='{.data.journal}' | base64 -d | jq '{phase,transactionID,steps:[.steps[]|{kind,phase}]}'
+# 2. Core and owner markers on the Machine, TalosConfig and InfraMachine.
+kubectl -n <ns> annotate machine <machine> in-place-updates.internal.cluster.x-k8s.io/update-in-progress- runtime.cluster.x-k8s.io/pending-hooks-
+kubectl -n <ns> annotate talosconfig <tc> in-place-updates.internal.cluster.x-k8s.io/update-in-progress- bootstrap.cluster.x-k8s.io/update-plan-secret- bootstrap.cluster.x-k8s.io/update-plan-uid-
+kubectl -n <ns> annotate <infra-kind> <infra> in-place-updates.internal.cluster.x-k8s.io/update-in-progress-
+# 3. The ambiguous journal (only when its transactionID is the stuck one).
+kubectl -n <ns> delete secret <tc>-update-operation
+# 4. The owner plan of a TalosControlPlane (CACPPT): tcp-<tcp UID>-inplace.
+kubectl -n <ns> delete secret tcp-$(kubectl -n <ns> get tcp <tcp> -o jsonpath='{.metadata.uid}')-inplace
+```
+
+Unpause afterwards. The TalosConfig keeps the desired spec the owner wrote; if the
+node did not converge, `ConfigDrift` keeps the Machine outdated and the owner plans a
+new transaction. Never clear a journal with a step `Issued` while its deadline has not
+passed: the bounded runner may still be applying it.
 
 ## Limitations
 
