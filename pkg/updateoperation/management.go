@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const managementProvenance = "talos-management"
@@ -257,6 +258,10 @@ func readManagement(ctx context.Context, reader client.Reader, a ManagementAutho
 // RecordManagementObservation writes only authority-owned private records.
 // Equal safety content reuses its opaque ID; changed unapproved content gets a
 // new immutable snapshot. A lost/replaced approved snapshot is never recreated.
+// An activated snapshot is replaced only when a fresh verified observation differs
+// from it in node lifecycle, etcd membership or re-verified intent; the replacement
+// keeps the activation and its accepted images. Any identity-class difference
+// (managementSnapshotDelta) keeps the record fail-closed and names what changed.
 func RecordManagementObservation(ctx context.Context, c client.Client, reader client.Reader, o *ManagementObservation) (*ActivationStatus, error) {
 	if o == nil || !o.summary.InventoryVerified {
 		return nil, managementError("verified observation required")
@@ -276,8 +281,17 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 		o.summary.Observation = *managementStatus(r)
 		return managementStatus(r), nil
 	}
-	if err == nil && r.Activated {
-		return nil, managementError("activated safety snapshot changed")
+	activated := err == nil && r.Activated
+	if activated {
+		approved := managementSafety{}
+		if json.Unmarshal(previous, &approved) != nil {
+			return nil, managementErrorDetail("activated safety snapshot changed", "activated snapshot decode")
+		}
+		identity, lifecycle := managementSnapshotDelta(approved, o.safety)
+		if len(identity) > 0 {
+			return nil, managementErrorDetail("activated safety snapshot changed", strings.Join(identity, "; "))
+		}
+		ctrllog.FromContext(ctx).Info("re-snapshotting activated Talos management after a node lifecycle change", "authority", o.safety.Authority.Kind+"/"+o.safety.Authority.Namespace+"/"+o.safety.Authority.Name, "previousObservation", r.ObservationID, "changes", lifecycle)
 	}
 	id := uuid.NewString()
 	immutable := true
@@ -287,6 +301,10 @@ func RecordManagementObservation(ctx context.Context, c client.Client, reader cl
 		return nil, managementError("snapshot create")
 	}
 	next := &managementRecord{Version: "v2", Authority: o.safety.Authority, ObservationID: id, ObservedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second)), SnapshotName: snapshot.Name, SnapshotUID: snapshot.UID, SnapshotDigest: sha256.Sum256(payload)}
+	if activated {
+		next.Activated = true
+		next.AcceptedImages = r.AcceptedImages
+	}
 	encoded, e := json.Marshal(next)
 	if e != nil {
 		return nil, managementError("record encoding")

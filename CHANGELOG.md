@@ -1,3 +1,22 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.10
+
+- An activated management record follows node lifecycle instead of wedging. Before,
+  any difference between the activated safety snapshot and a fresh observation (a
+  control plane reset and rejoined etcd under a new member ID, a new boot ID, a
+  re-registered Node) failed every re-observation with `Talos management activated
+  safety snapshot changed failed`, and only deleting the record unlocked it. A fresh,
+  fully verified observation now replaces the activated snapshot when it differs only
+  in node lifecycle (Node UID, boot ID, live configuration, OS/kubelet/extensions),
+  etcd membership, credential metadata or re-verified intent; the activation and its
+  accepted images carry over, and the controller logs `re-snapshotting activated Talos
+  management after a node lifecycle change` with the changes (`tiikerinpentu: boot ID
+  … -> …`, `etcd tiikerinpentu: member … -> …`). Identity-class changes stay
+  fail-closed and are now named in the error: authority, Cluster UID/name/inputs,
+  kubeconfig and talosconfig trust identity, member inventory, a member's
+  Machine/TalosConfig/InfraMachine/Node name/provider ID/original seed, and the trust
+  identity in a member's live configuration (machine, etcd and Kubernetes CAs,
+  discovery cluster ID and secret).
+
 ## Unreleased CRACI integration changes — v0.9.0-craci.9
 
 - Observation failures name the member, the endpoint it was dialed through and the

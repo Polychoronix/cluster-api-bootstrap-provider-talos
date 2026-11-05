@@ -101,10 +101,17 @@ Per-Machine UID override/owner-transfer machinery is removed; no observer adopts
 creates Machines, changes existing owners or fabricates infrastructure status.
 
 Once activated, current requested policy changes use the same renderer and journaled
-executor without a second approval ceremony. The original activation snapshot stays
-immutable and UID-bound; accepted image state advances privately only after all
-operation steps have actual completion witnesses. Completion receipts still fence
-CAPI/core/owner cleanup. They are operation receipts, never bootstrap-seed receipts.
+executor without a second approval ceremony. Each activation snapshot is immutable and
+UID-bound; accepted image state advances privately only after all operation steps have
+actual completion witnesses. When a later verified observation differs from the
+activated snapshot only in node lifecycle (a reset member's new boot ID, Node UID or
+etcd member ID, its live configuration and versions), etcd membership or re-verified
+intent, a new immutable snapshot replaces it and keeps the activation and accepted
+images. Identity-class differences (authority, Cluster identity and inputs, cluster
+credentials, member inventory and associations, the CAs and discovery identity in a
+member's live configuration) keep the record fail-closed with
+`activated safety snapshot changed failed: <what changed>`. Completion receipts still
+fence CAPI/core/owner cleanup. They are operation receipts, never bootstrap-seed receipts.
 
 Readiness loss during an issued reboot remains a recovery wait on the same Node UID,
 not permission to reissue. New disruptive work requires fresh health checks. Pauses
