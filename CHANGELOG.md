@@ -1,3 +1,9 @@
+## CRACI integration changes — v0.9.0-craci.13
+
+- Lockstep with CACPPT v0.9.0-craci.13, no code change. CACPPT craci.13 grants its
+  manager role the `delete` verb on Secrets so a Consumed in-place owner plan can be
+  removed.
+
 ## CRACI integration changes — v0.9.0-craci.12
 
 - An `Ambiguous` in-place journal whose Apply step was issued is settled by
