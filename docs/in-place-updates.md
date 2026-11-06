@@ -197,7 +197,11 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
 5. The core Machine controller polls `UpdateMachine`. The extension uses uncached
    Machine/TC/Infra/source observations and stores a private, UID-bound operation
    journal before every mutating RPC. A manager-owned bounded runner outlives the
-   hook HTTP request; concurrent polls never reissue an `Issued` operation. Unknown
+   hook HTTP request; concurrent polls never reissue an `Issued` operation. Each
+   `UpdateMachine` evaluation also runs detached from the hook request (handler
+   timeout 30s, evaluation bounded at 3 minutes), one per Machine: later calls join
+   it, and a call whose request ends first is asked to call again. Completion writes
+   compare-and-swap against a fresh uncached read of the journal. Unknown
    responses, lost durable acknowledgments, changed inputs/identities or expired
    recovery deadlines after a step was issued stop for intervention rather than
    retry or replacement. A journal none of whose steps was issued (every step still

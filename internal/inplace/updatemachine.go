@@ -14,6 +14,7 @@ import (
 	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"strings"
+	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
@@ -33,11 +34,70 @@ const (
 	waitForRebootSeconds = 30
 )
 
+// updateEvaluationTimeout bounds one UpdateMachine evaluation. It is deliberately longer
+// than the hook request: Cluster API cancels the request after the handler timeout (at
+// most 30s), and every write an evaluation makes is a durable compare-and-swap step the
+// next call resumes from, so finishing it after the caller left is safe.
+var updateEvaluationTimeout = 3 * time.Minute
+
+// updateEvaluation is one running UpdateMachine evaluation for a Machine.
+type updateEvaluation struct {
+	done     chan struct{}
+	response runtimehooksv1.UpdateMachineResponse
+}
+
 // DoUpdateMachine polls the durable requested operation and only completes after recovery.
+// The evaluation runs detached from the hook request, one at a time per Machine: a call
+// arriving while one is still running joins it instead of starting another. The caller
+// gets its outcome if it finishes within the request; otherwise it is asked to call
+// again and the next call finds the durable result.
 func (h *Handler) DoUpdateMachine(ctx context.Context, req *runtimehooksv1.UpdateMachineRequest, resp *runtimehooksv1.UpdateMachineResponse) {
-	if err := h.executeUpdate(ctx, req, resp); err != nil {
-		respondRetryFailure(&resp.CommonRetryResponse, "Talos requested update failed", err, ctrl.LoggerFrom(ctx))
+	evaluation := h.startUpdateEvaluation(ctx, req)
+	select {
+	case <-evaluation.done:
+		resp.Status = evaluation.response.Status
+		resp.Message = evaluation.response.Message
+		resp.RetryAfterSeconds = evaluation.response.RetryAfterSeconds
+	case <-ctx.Done():
+		respondRetry(resp, "update evaluation continues after the hook request ended")
 	}
+}
+
+func (h *Handler) startUpdateEvaluation(ctx context.Context, req *runtimehooksv1.UpdateMachineRequest) *updateEvaluation {
+	key := req.Desired.Machine.Namespace + "/" + req.Desired.Machine.Name
+	h.evaluationsMu.Lock()
+	defer h.evaluationsMu.Unlock()
+	if running, ok := h.evaluations[key]; ok {
+		return running
+	}
+	if h.evaluations == nil {
+		h.evaluations = map[string]*updateEvaluation{}
+	}
+	evaluation := &updateEvaluation{done: make(chan struct{})}
+	h.evaluations[key] = evaluation
+	// Detached from the hook request, still bound to the manager's lifetime.
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), updateEvaluationTimeout)
+	stop := func() bool { return false }
+	h.runner.mu.Lock()
+	if lifetime := h.runner.ctx; lifetime != nil {
+		stop = context.AfterFunc(lifetime, cancel)
+	}
+	h.runner.mu.Unlock()
+	request := req.DeepCopy()
+	go func() {
+		defer close(evaluation.done)
+		defer func() {
+			h.evaluationsMu.Lock()
+			delete(h.evaluations, key)
+			h.evaluationsMu.Unlock()
+		}()
+		defer cancel()
+		defer stop()
+		if err := h.executeUpdate(work, request, &evaluation.response); err != nil {
+			respondRetryFailure(&evaluation.response.CommonRetryResponse, "Talos requested update failed", err, ctrl.LoggerFrom(work))
+		}
+	}()
+	return evaluation
 }
 
 // respondRetry asks Cluster API to call again after the reboot wait.

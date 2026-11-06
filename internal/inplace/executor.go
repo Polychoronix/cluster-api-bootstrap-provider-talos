@@ -431,11 +431,38 @@ func (h *Handler) finalizeObserved(ctx context.Context, s *operationSnapshot, se
 	if err := h.guardIssued(ctx, s.machine.Namespace, j); err != nil {
 		return h.ambiguous(ctx, secret, j, err)
 	}
+	// Recovery, guards and image acceptance can take many seconds through a slow
+	// workload API: compare-and-swap against the journal as it is now, not as it was
+	// read when this call began, provided it is still exactly the journal decided on.
+	fresh, err := h.freshJournal(ctx, s.machine.Namespace, j)
+	if err != nil || fresh == nil {
+		return err
+	}
 	now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
 	j.Phase = op.Observed
 	j.CompletedAt = &now
 	receipt := &op.CompletionReceipt{Version: op.SchemaVersion, TransactionID: j.TransactionID, MachineUID: j.Machine.UID, TalosConfigUID: j.TalosConfig.UID, InfrastructureUID: j.Infrastructure.UID, InputFreshness: j.InputFreshness, Phase: op.Observed, CompletedAt: now}
-	return op.WriteJournal(ctx, h.client, secret, j, receipt)
+	return op.WriteJournal(ctx, h.client, fresh, j, receipt)
+}
+
+// freshJournal re-reads the journal Secret uncached right before a completion write.
+// It returns the Secret to compare-and-swap against when the stored journal is still
+// exactly expected, nil (and no error) when this transaction was already completed
+// with its receipt by a concurrent evaluation, and an error for any other change.
+func (h *Handler) freshJournal(ctx context.Context, namespace string, expected *op.Journal) (*corev1.Secret, error) {
+	secret, stored, err := op.ReadJournal(ctx, h.reader, namespace, expected.TalosConfig)
+	if err != nil {
+		return nil, err
+	}
+	if stored.TransactionID == expected.TransactionID && stored.Phase == op.Observed {
+		if _, err := op.ReadReceipt(ctx, h.reader, namespace, stored.TalosConfig, stored.TransactionID); err == nil {
+			return nil, nil
+		}
+	}
+	if !reflect.DeepEqual(stored, expected) {
+		return nil, fmt.Errorf("operation journal changed before completion")
+	}
+	return secret, nil
 }
 
 func workloadNodeReady(node *corev1.Node) bool {

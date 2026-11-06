@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -32,6 +33,9 @@ type Handler struct {
 	runner        *operationRunner
 	// settlements records the ambiguous-journal settlement outcomes already logged.
 	settlements sync.Map
+	// evaluations holds the running UpdateMachine evaluation per Machine (namespace/name).
+	evaluationsMu sync.Mutex
+	evaluations   map[string]*updateEvaluation
 }
 
 // NewHandler separates write access from the uncached reader used for operation guards.
@@ -96,6 +100,9 @@ func AddToManager(mgr manager.Manager, handler *Handler, opts Options) error {
 			Hook:        runtimehooksv1.UpdateMachine,
 			Name:        "update-machine",
 			HandlerFunc: handler.DoUpdateMachine,
+			// The longest Cluster API allows: completing an operation reads the workload
+			// API, Talos and etcd several times. Longer evaluations continue detached.
+			TimeoutSeconds: ptr.To[int32](30),
 		},
 	}
 

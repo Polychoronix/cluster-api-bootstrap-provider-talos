@@ -168,7 +168,14 @@ func WriteJournal(ctx context.Context, c client.Client, s *corev1.Secret, j *Jou
 	return PatchData(ctx, c, s, next)
 }
 
+// ErrSecretConflict is a compare-and-swap that lost: the Secret's UID or
+// resourceVersion no longer matched the copy the write was based on.
+var ErrSecretConflict = safe("Secret CAS conflict")
+
 // PatchData is an exact UID/resourceVersion-guarded Secret update, never an upsert.
+// Only a lost compare-and-swap is reported as ErrSecretConflict; a write cut short by
+// its context, or rejected for any other reason, says so, so a slow caller is never
+// mistaken for a concurrent writer.
 func PatchData(ctx context.Context, c client.Client, s *corev1.Secret, next map[string][]byte) error {
 	if s == nil || s.UID == "" || s.ResourceVersion == "" {
 		return safe("Secret CAS identity")
@@ -178,10 +185,21 @@ func PatchData(ctx context.Context, c client.Client, s *corev1.Secret, next map[
 	if e != nil {
 		return safe("Secret CAS encoding")
 	}
-	if c.Patch(ctx, s.DeepCopy(), client.RawPatch(types.JSONPatchType, payload)) != nil {
-		return safe("Secret CAS conflict")
+	err := c.Patch(ctx, s.DeepCopy(), client.RawPatch(types.JSONPatchType, payload))
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return safe("Secret write interrupted by the caller's deadline")
+	case apierrors.IsConflict(err) || apierrors.IsInvalid(err) || apierrors.IsNotFound(err):
+		// A failed JSON patch "test" (UID or resourceVersion moved) is 422 Invalid.
+		return ErrSecretConflict
+	default:
+		if reason := apierrors.ReasonForError(err); reason != "" {
+			return safe(fmt.Sprintf("Secret write rejected (%s)", reason))
+		}
+		return safe("Secret write rejected")
 	}
-	return nil
 }
 
 // Unissued reports whether no step of j was ever issued to the node: every step is

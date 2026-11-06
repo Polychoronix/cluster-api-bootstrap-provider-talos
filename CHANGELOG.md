@@ -21,6 +21,22 @@
   whose later steps (installer pull/install/reboot) were never issued are not settled
   as applied. Completion checks now use the same order-insensitive comparator as
   drift and activation (`activeConfigurationMatches`).
+- In-place completion no longer fails forever with `Talos update operation Secret CAS
+  conflict failed`. The journal had no other writer and was read uncached at the start
+  of every `UpdateMachine` call; the completion evaluation (recovery witnesses, etcd
+  and workload API reads through a slow proxy, two identity guards, image acceptance)
+  outran Cluster API's 10s hook timeout, the request context was cancelled, and the
+  final write failed on it — reported as a CAS conflict because `PatchData` labelled
+  every failed write that way. Now: `UpdateMachine` evaluations run detached from the
+  hook request, one at a time per Machine (later calls join the running one; a caller
+  whose request ends first is asked to call again), bounded at 3 minutes and by the
+  manager's lifetime; the handler registers the maximum `timeoutSeconds: 30`; the
+  completion (and ambiguous-settlement) write re-reads the journal uncached and
+  compares-and-swaps on that fresh resourceVersion when the stored journal is still
+  exactly the one decided on (already completed by a concurrent evaluation counts as
+  done); `PatchData` reports `ErrSecretConflict` only for a lost compare-and-swap
+  (409/422), `Secret write interrupted by the caller's deadline` for a cancelled
+  context, and `Secret write rejected (<reason>)` otherwise.
 
 ## CRACI integration changes — v0.9.0-craci.11
 

@@ -51,7 +51,7 @@ func (h *Handler) settleAmbiguous(ctx context.Context, s *operationSnapshot, sec
 		return h.unresolved(ctx, j, "live configuration unreadable")
 	}
 	if len(differing) == 0 {
-		return h.settleApplied(ctx, s, secret, j, index, observation, resp)
+		return h.settleApplied(ctx, s, j, index, observation, resp)
 	}
 	if j.BaselineDigest != "" {
 		live, err := op.ConfigurationDigest(observation.Configuration)
@@ -74,7 +74,7 @@ func (h *Handler) settleAmbiguous(ctx context.Context, s *operationSnapshot, sec
 // never-acknowledged outcome is taken from the boot witness: an unchanged boot means the
 // configuration was applied without a reboot, a changed one that the node rebooted since
 // issuance. The normal recovery checks and image acceptance run before the single write.
-func (h *Handler) settleApplied(ctx context.Context, s *operationSnapshot, secret *corev1.Secret, j *op.Journal, index int, observation NodeObservation, resp *runtimehooks.UpdateMachineResponse) error {
+func (h *Handler) settleApplied(ctx context.Context, s *operationSnapshot, j *op.Journal, index int, observation NodeObservation, resp *runtimehooks.UpdateMachineResponse) error {
 	for i, step := range j.Steps {
 		if i != index && step.Phase != op.StepObserved {
 			return h.unresolved(ctx, j, "the apply landed but later steps were never issued")
@@ -112,12 +112,18 @@ func (h *Handler) settleApplied(ctx context.Context, s *operationSnapshot, secre
 	if err := h.acceptObservedImage(ctx, s, &next); err != nil {
 		return err
 	}
-	now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
-	next.Phase = op.Observed
-	next.CompletedAt = &now
-	receipt := &op.CompletionReceipt{Version: op.SchemaVersion, TransactionID: next.TransactionID, MachineUID: next.Machine.UID, TalosConfigUID: next.TalosConfig.UID, InfrastructureUID: next.Infrastructure.UID, InputFreshness: next.InputFreshness, Phase: op.Observed, CompletedAt: now}
-	if err := op.SettleAmbiguousJournal(ctx, h.client, secret, &next, receipt); err != nil {
+	fresh, err := h.freshJournal(ctx, s.machine.Namespace, j)
+	if err != nil {
 		return err
+	}
+	if fresh != nil {
+		now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+		next.Phase = op.Observed
+		next.CompletedAt = &now
+		receipt := &op.CompletionReceipt{Version: op.SchemaVersion, TransactionID: next.TransactionID, MachineUID: next.Machine.UID, TalosConfigUID: next.TalosConfig.UID, InfrastructureUID: next.Infrastructure.UID, InputFreshness: next.InputFreshness, Phase: op.Observed, CompletedAt: now}
+		if err := op.SettleAmbiguousJournal(ctx, h.client, fresh, &next, receipt); err != nil {
+			return err
+		}
 	}
 	h.reportSettlement(ctx, j, settledApplied, "applyOutcome "+string(step.ApplyOutcome))
 	resp.Status = runtimehooks.ResponseStatusSuccess

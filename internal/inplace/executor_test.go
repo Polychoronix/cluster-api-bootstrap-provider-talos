@@ -43,9 +43,20 @@ type durableNode struct {
 	installed                                        string
 	installGate                                      chan struct{}
 	installErr                                       error
+	// observeGate, when set, holds every Observe until it is closed; observeCount
+	// counts Observe calls.
+	observeGate  chan struct{}
+	observeCount int
 }
 
 func (n *durableNode) Observe(context.Context) (NodeObservation, error) {
+	n.mu.Lock()
+	n.observeCount++
+	gate := n.observeGate
+	n.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	v := n.observation
