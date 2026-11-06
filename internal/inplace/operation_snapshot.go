@@ -115,6 +115,11 @@ func (h *Handler) plan(ctx context.Context, s *operationSnapshot, observed NodeO
 		return nil, fmt.Errorf("operation workload Node identity mismatch")
 	}
 	j := &op.Journal{Version: op.SchemaVersion, TransactionID: uuid.NewString(), Machine: objectIdentity(clusterv1.GroupVersion.Group, "Machine", m), TalosConfig: objectIdentity(bootstrapv1.GroupVersion.Group, "TalosConfig", c), Infrastructure: objectIdentity(m.Spec.InfrastructureRef.APIGroup, m.Spec.InfrastructureRef.Kind, s.infra), Inputs: s.resolved.Sources(), InputFreshness: bytes.Clone(s.output.Data[configinput.FreshnessKey]), Configuration: bytes.Clone(s.output.Data["value"]), Phase: op.Planned, PriorAcceptedImageIntent: accepted, TargetImage: image, TargetKubernetesVersion: m.Spec.Version, Endpoint: s.endpoint, NodeName: node.Name, NodeUID: node.UID, NodeProviderID: node.Spec.ProviderID, Steps: []op.OperationStep{{Kind: op.Apply, Phase: op.StepPlanned, ApplyOutcome: op.Unknown}}}
+	// Recorded so an ambiguous apply can later be proven never to have landed; a live
+	// configuration that cannot be parsed simply leaves that proof unavailable.
+	if baseline, err := op.ConfigurationDigest(observed.Configuration); err == nil {
+		j.BaselineDigest = baseline
+	}
 	if image.Reference != accepted.Reference || !reflect.DeepEqual(image.Extensions, accepted.Extensions) {
 		if err := validateVersionTransition(observed.OSVersion, image.Reference, node.Status.NodeInfo.KubeletVersion, m.Spec.Version); err != nil {
 			return nil, err

@@ -209,6 +209,18 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
    the hook answers "waiting for the workload API" and the issuing runner's guard
    retries until the step deadline. Only a Node that is gone or carries another
    UID/providerID is `activated workload Node identity changed`.
+   An `Ambiguous` journal whose Apply step was issued is settled by observation on
+   each later poll, once no runner can still act on it (an unacknowledged step only
+   after its deadline) and after the pause and identity guards: the node running the
+   requested configuration (compared document by document, order-insensitive)
+   completes the journal as `Observed` with its receipt once the normal recovery
+   witnesses hold, the Apply outcome taken from the boot witness when it was never
+   acknowledged; a never-acknowledged Apply whose node still runs the configuration
+   recorded when the operation was planned never landed and is discarded and
+   re-planned. Anything else (neither configuration, an acknowledged apply on the
+   pre-apply configuration, a later step with an unknown outcome, an unobservable
+   node) stays `Ambiguous` and the error names why. Journals planned before craci.12
+   carry no pre-apply record, so only the landed outcome settles them.
 6. Apply acknowledgment is not completion: verify actual active full configuration,
    target OS/kubelet versions, preserved Node UID/providerID and Node Ready. A chosen
    reboot additionally requires a changed kernel BootID. Installer updates bind a
@@ -234,11 +246,13 @@ intervention; initial or consumed next-generation rendering waits safely.
 
 ### Clearing a genuinely ambiguous transaction
 
-`UpdateMachine` answering `operation outcome ambiguous; intervention required` (or
-`operation step ambiguous`) means a step reached the node and its outcome could not
-be verified. First establish what the node actually runs (`talosctl get mc`,
-`talosctl version`, Node Ready, etcd membership for a control plane) and decide
-whether the change landed. Then, with the owning TalosControlPlane (or Machine) paused
+`UpdateMachine` answering `operation outcome ambiguous; intervention required: <reason>`
+(or `operation step ambiguous`) means a step reached the node and observation could
+not settle its outcome (step 5 above; the reason says why, and the controller logs
+`ambiguous in-place operation settlement` once per outcome). First establish what the
+node actually runs (`talosctl get mc`, `talosctl version`, Node Ready, etcd membership
+for a control plane) and decide whether the change landed. Then, with the owning
+TalosControlPlane (or Machine) paused
 via `cluster.x-k8s.io/paused`, clear the transaction in this order (namespace of the
 Machine; `<tc>` is the Machine's TalosConfig, `<infra>` its InfraMachine):
 

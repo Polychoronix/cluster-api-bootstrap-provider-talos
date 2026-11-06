@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +30,8 @@ type Handler struct {
 	reader        client.Reader
 	newNodeClient OperationNodeFactory
 	runner        *operationRunner
+	// settlements records the ambiguous-journal settlement outcomes already logged.
+	settlements sync.Map
 }
 
 // NewHandler separates write access from the uncached reader used for operation guards.

@@ -121,7 +121,11 @@ type Journal struct {
 	NodeProviderID           string                       `json:"nodeProviderID"`
 	ControlPlane             []ObjectIdentity             `json:"controlPlane,omitempty"`
 	OriginalEtcdMembers      []EtcdMemberIdentity         `json:"originalEtcdMembers,omitempty"`
-	CompletedAt              *metav1.Time                 `json:"completedAt,omitempty"`
+	// BaselineDigest is the ConfigurationDigest of the node's live configuration when the
+	// operation was planned. An Ambiguous apply whose node still runs exactly this
+	// configuration never landed. Empty for journals planned before craci.12.
+	BaselineDigest string       `json:"baselineDigest,omitempty"`
+	CompletedAt    *metav1.Time `json:"completedAt,omitempty"`
 }
 type CompletionReceipt struct {
 	Version           string      `json:"version"`

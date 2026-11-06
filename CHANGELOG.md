@@ -1,3 +1,27 @@
+## Unreleased CRACI integration changes — v0.9.0-craci.12
+
+- An `Ambiguous` in-place journal whose Apply step was issued is settled by
+  observation instead of always demanding intervention. On each later
+  `UpdateMachine` call (after the pause check and the frozen-identity guard, and for
+  a never-acknowledged step only once its deadline has passed, so no runner can still
+  act on it) the node is observed: running the requested configuration (document by
+  document, order-insensitive) proves the apply landed, and once the normal recovery
+  witnesses hold the journal completes as `Observed` with its receipt in one
+  compare-and-swap (`SettleAmbiguousJournal`, the only transition out of `Ambiguous`),
+  the Apply outcome taken from the boot witness when it was never acknowledged
+  (unchanged boot: `NoReboot`; rebooted since issuance: `RebootRequired`). A
+  never-acknowledged Apply whose node still runs the configuration recorded when the
+  operation was planned (new journal field `baselineDigest`, an order-insensitive
+  document digest) never landed: the journal is discarded and re-planned. Anything
+  else stays `Ambiguous`, now with the reason (`… intervention required: live
+  configuration matches neither … differs from the requested one in <document
+  ids>`). Each outcome is logged once (`ambiguous in-place operation settlement`,
+  `transactionID`, `outcome` applied/never-landed/unresolved). Journals planned before
+  this release carry no baseline, so only the landed outcome settles them; journals
+  whose later steps (installer pull/install/reboot) were never issued are not settled
+  as applied. Completion checks now use the same order-insensitive comparator as
+  drift and activation (`activeConfigurationMatches`).
+
 ## CRACI integration changes — v0.9.0-craci.11
 
 - An in-place operation that was never issued is never terminal. Any failure before

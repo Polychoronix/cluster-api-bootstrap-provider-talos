@@ -204,16 +204,22 @@ func Unissued(j *Journal) bool {
 // caller's copy) must be unissued and unreceipted; deletion is guarded by UID and
 // resourceVersion, so a concurrent issuance (a CAS write) makes it fail instead.
 func DiscardUnissuedJournal(ctx context.Context, c client.Client, s *corev1.Secret, transactionID string) error {
-	if s == nil || s.UID == "" || s.ResourceVersion == "" {
-		return safe("unissued journal identity")
-	}
 	stored := &Journal{}
-	if json.Unmarshal(s.Data[JournalKey], stored) != nil || !validateOwner(s, stored.TalosConfig) || stored.TransactionID != transactionID || len(s.Data[ReceiptKey]) > 0 || !Unissued(stored) {
+	if s == nil || json.Unmarshal(s.Data[JournalKey], stored) != nil || stored.TransactionID != transactionID || len(s.Data[ReceiptKey]) > 0 || !Unissued(stored) {
 		return safe("unissued journal discard")
+	}
+	return deleteJournal(ctx, c, s, stored)
+}
+
+// deleteJournal removes the journal Secret exactly as read: owner-checked, UID and
+// resourceVersion guarded, so a concurrent write makes it fail instead.
+func deleteJournal(ctx context.Context, c client.Client, s *corev1.Secret, stored *Journal) error {
+	if s.UID == "" || s.ResourceVersion == "" || !validateOwner(s, stored.TalosConfig) {
+		return safe("journal discard identity")
 	}
 	uid, version := s.UID, s.ResourceVersion
 	if c.Delete(ctx, s.DeepCopy(), client.Preconditions{UID: &uid, ResourceVersion: &version}) != nil {
-		return safe("unissued journal delete conflict")
+		return safe("journal delete conflict")
 	}
 	return nil
 }

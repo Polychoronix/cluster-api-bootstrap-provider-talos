@@ -4,31 +4,19 @@
 package inplace
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
-	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
-	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 )
 
+// activeConfigurationMatches compares document by document, order-insensitive: the same
+// comparator decides drift, activation baselines and ambiguous-apply settlement, so an
+// operation never counts as converged by one rule and unconverged by another.
 func activeConfigurationMatches(actual, desired []byte) bool {
-	a, err := configloader.NewFromBytes(actual)
-	if err != nil {
-		return false
-	}
-	b, err := configloader.NewFromBytes(desired)
-	if err != nil {
-		return false
-	}
-	x, err := a.EncodeBytes(encoder.WithComments(encoder.CommentsDisabled))
-	if err != nil {
-		return false
-	}
-	y, err := b.EncodeBytes(encoder.WithComments(encoder.CommentsDisabled))
-	return err == nil && bytes.Equal(x, y)
+	differing, err := op.ConfigurationDiff(actual, desired)
+	return err == nil && len(differing) == 0
 }
 func (h *Handler) observeStep(ctx context.Context, s *operationSnapshot, j *op.Journal, index int) (bool, error) {
 	step := j.Steps[index]

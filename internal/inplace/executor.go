@@ -112,7 +112,9 @@ func (h *Handler) executeUpdate(ctx context.Context, req *runtimehooks.UpdateMac
 		if op.Unissued(j) {
 			return h.ambiguous(ctx, secret, j, fmt.Errorf("operation was marked ambiguous before issuance"))
 		}
-		return fmt.Errorf("operation outcome ambiguous; intervention required")
+		// Identities passed the guard above and management is not paused (the snapshot
+		// would have failed): try to settle the outcome by observing the node.
+		return h.settleAmbiguous(ctx, s, secret, j, resp)
 	}
 	if j.Phase == op.Observed {
 		if _, err := op.ReadReceipt(ctx, h.reader, s.machine.Namespace, j.TalosConfig, j.TransactionID); err != nil {
