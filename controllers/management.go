@@ -1,0 +1,252 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+package controllers
+
+import (
+	"context"
+	"errors"
+	bootstrapv1 "github.com/siderolabs/cluster-api-bootstrap-provider-talos/api/v1beta1"
+	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/annotations"
+	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/patch"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
+	"time"
+)
+
+// Bootstrap may precede a live Node; every requested update requires one activated observation.
+func (r *TalosConfigReconciler) reconcileManagementEarly(ctx context.Context, tc *bootstrapv1.TalosConfig) (bool, ctrl.Result, error) {
+	if r.APIReader == nil {
+		return true, ctrl.Result{}, errors.New("Talos activation APIReader required")
+	}
+	owner := metav1.GetControllerOf(tc)
+	if owner == nil || owner.Kind != "Machine" || owner.APIVersion != clusterv1.GroupVersion.String() {
+		if annotations.HasPaused(tc) {
+			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+		}
+		return false, ctrl.Result{}, nil
+	}
+	m := &clusterv1.Machine{}
+	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: tc.Namespace, Name: owner.Name}, m) != nil || m.UID != owner.UID {
+		if annotations.HasPaused(tc) {
+			return true, ctrl.Result{}, r.managementPausedStatus(ctx, tc)
+		}
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "AssociationPending")
+	}
+	cluster := &clusterv1.Cluster{}
+	if r.APIReader.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.ClusterName}, cluster) != nil {
+		return true, ctrl.Result{}, errors.New("Talos activation Cluster lookup failed")
+	}
+	// Paused (CAPI cluster.x-k8s.io/paused on the TalosConfig, Machine or Cluster, or
+	// Cluster.spec.paused): nothing is activated, applied or converged, but drift is
+	// still observed and reported so the operator sees what an unpause will converge.
+	if annotations.HasPaused(tc) || annotations.IsPaused(cluster, m) {
+		if err := r.managementPausedStatus(ctx, tc); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		if !m.Status.NodeRef.IsDefined() {
+			return true, ctrl.Result{}, nil
+		}
+		return true, r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+	}
+	// Real first bootstrap is not an in-place operation and cannot require a Node that does not exist yet.
+	if m.Spec.Bootstrap.DataSecretName == nil && !m.Status.NodeRef.IsDefined() {
+		return false, ctrl.Result{}, nil
+	}
+	authority, manage, err := op.ManagementAuthorityForMachine(ctx, r.APIReader, m, tc)
+	if err != nil {
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "AssociationPending")
+	}
+	if !m.Status.NodeRef.IsDefined() {
+		if err := r.activationStatus(ctx, tc, false, "NodePending"); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return bootstrapv1.IsInPlaceUpdate(tc), ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	if authority.Kind == "TalosControlPlane" {
+		if !manage {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ConsentAbsent")
+		}
+		if err := op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationPending", err)
+		}
+		message := activatedBaselineMessage(op.MemberBaseline(ctx, r.APIReader, m, tc))
+		if conditions.IsFalse(tc, bootstrapv1.ConfigDriftCondition) {
+			// The snapshot still says what the node ran at activation; a later drift
+			// observation finding no difference means the in-place update converged it.
+			message = ""
+		}
+		if err := r.activationStatusMessage(ctx, tc, true, "Activated", message); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return !bootstrapv1.IsInPlaceUpdate(tc), r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+	}
+	if state, err := op.ReadManagementStatus(ctx, r.APIReader, authority); err == nil && state.Activated && manage {
+		if err = op.ValidateManagedMachine(ctx, r.APIReader, m, tc); err != nil {
+			return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationInvalid", err)
+		}
+		if err = r.activationStatus(ctx, tc, true, "Activated"); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return !bootstrapv1.IsInPlaceUpdate(tc), r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+	}
+	request := op.ManagementObservationRequest{Authority: authority, Cluster: cluster, Manage: manage, Machines: []*clusterv1.Machine{m}, TalosConfigs: []*bootstrapv1.TalosConfig{tc}}
+	observation, err := op.ObserveManagement(ctx, r.APIReader, request)
+	if err != nil {
+		reason := "ObservationPending"
+		if op.IsBaselineMismatch(err) {
+			reason = "BaselineMismatch"
+		}
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, reason, err)
+	}
+	if _, err = op.RecordManagementObservation(ctx, r.Client, r.APIReader, observation); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if !manage {
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationStatus(ctx, tc, false, "ConsentAbsent")
+	}
+	if _, err = op.ActivateManagement(ctx, r.Client, r.APIReader, request); err != nil {
+		return true, ctrl.Result{RequeueAfter: 2 * time.Second}, r.activationFailure(ctx, tc, "ActivationPending", err)
+	}
+	if err := r.activationStatusMessage(ctx, tc, true, "Activated", observedBaselineMessage(observation.Summary(), m.Name)); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	return true, r.reconcileConfigDrift(ctx, tc, m, cluster), nil
+}
+
+// observedBaselineMessage is activatedBaselineMessage for a fresh observation.
+func observedBaselineMessage(summary op.ManagementObservationSummary, machine string) string {
+	if drift := summary.Drifted[machine]; len(drift) > 0 {
+		return activatedBaselineMessage(op.BaselineDrift, drift)
+	}
+	for _, name := range summary.CurrentBaselines {
+		if name == machine {
+			return activatedBaselineMessage(op.BaselineCurrent, nil)
+		}
+	}
+	return ""
+}
+
+// reconcileConfigDrift re-observes an activated node on the configured interval and
+// reports whether its live configuration still matches the TalosConfig's render. It
+// requeues for the next check and never applies anything.
+func (r *TalosConfigReconciler) reconcileConfigDrift(ctx context.Context, tc *bootstrapv1.TalosConfig, m *clusterv1.Machine, cluster *clusterv1.Cluster) ctrl.Result {
+	if r.ConfigDriftCheckInterval <= 0 {
+		return ctrl.Result{}
+	}
+	if bootstrapv1.IsInPlaceUpdate(tc) {
+		// The owner converges drift through this transaction: a ConfigDrift=True left
+		// standing would offer the next update before re-observation. Mark the observation
+		// pending and re-observe as soon as the transaction ends.
+		r.driftChecked.Delete(tc.UID)
+		r.recordConfigDrift(ctx, tc, metav1.Condition{Type: bootstrapv1.ConfigDriftCondition, Status: metav1.ConditionUnknown, Reason: bootstrapv1.DriftObservationPendingReason, Message: "in-place update in progress; re-observed when it completes", ObservedGeneration: tc.Generation})
+		return ctrl.Result{}
+	}
+	if last, ok := r.driftChecked.Load(tc.UID); ok {
+		if wait := r.ConfigDriftCheckInterval - time.Since(last.(time.Time)); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}
+		}
+	}
+	observe := r.DriftObserver
+	if observe == nil {
+		observe = op.ObserveConfigDrift
+	}
+	report, err := observe(ctx, r.APIReader, m, tc, cluster)
+	r.driftChecked.Store(tc.UID, time.Now())
+	condition := metav1.Condition{Type: bootstrapv1.ConfigDriftCondition, Status: metav1.ConditionFalse, Reason: bootstrapv1.NoConfigDriftReason, ObservedGeneration: tc.Generation}
+	switch {
+	case err != nil && op.IsObservationPending(err):
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = bootstrapv1.DriftObservationPendingReason
+		condition.Message = err.Error()
+	case err != nil:
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = bootstrapv1.DriftObservationPendingReason
+		condition.Message = err.Error()
+	case report.Drifted():
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = bootstrapv1.ConfigDriftedReason
+		condition.Message = "live configuration differs from the TalosConfig render in: " + strings.Join(report.Differing, ", ")
+		if len(condition.Message) > 1024 {
+			condition.Message = condition.Message[:1024]
+		}
+	}
+	r.recordConfigDrift(ctx, tc, condition)
+	return ctrl.Result{RequeueAfter: r.ConfigDriftCheckInterval}
+}
+
+// recordConfigDrift publishes a ConfigDrift condition, logging transitions.
+func (r *TalosConfigReconciler) recordConfigDrift(ctx context.Context, tc *bootstrapv1.TalosConfig, condition metav1.Condition) {
+	previous := conditions.Get(tc, bootstrapv1.ConfigDriftCondition)
+	if previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason || previous.Message != condition.Message {
+		r.Log.Info("Talos configuration drift observed", "talosconfig", client.ObjectKeyFromObject(tc).String(), "status", condition.Status, "reason", condition.Reason, "message", condition.Message)
+	}
+	if helper, err := patch.NewHelper(tc, r.Client); err == nil {
+		conditions.Set(tc, condition)
+		if err := helper.Patch(ctx, tc, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ConfigDriftCondition}}); err != nil {
+			r.Log.Error(err, "failed to record configuration drift", "talosconfig", client.ObjectKeyFromObject(tc).String())
+		}
+	}
+}
+func (r *TalosConfigReconciler) managementPausedStatus(ctx context.Context, tc *bootstrapv1.TalosConfig) error {
+	helper, err := patch.NewHelper(tc, r.Client)
+	if err != nil {
+		return err
+	}
+	conditions.Set(tc, metav1.Condition{Type: clusterv1.PausedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.PausedReason, ObservedGeneration: tc.Generation})
+	return helper.Patch(ctx, tc, patch.WithOwnedConditions{Conditions: []string{clusterv1.PausedCondition}})
+}
+func (r *TalosConfigReconciler) activationStatus(ctx context.Context, tc *bootstrapv1.TalosConfig, active bool, reason string) error {
+	return r.activationStatusMessage(ctx, tc, active, reason, "")
+}
+
+func (r *TalosConfigReconciler) activationStatusMessage(ctx context.Context, tc *bootstrapv1.TalosConfig, active bool, reason, message string) error {
+	helper, err := patch.NewHelper(tc, r.Client)
+	if err != nil {
+		return err
+	}
+	status := metav1.ConditionFalse
+	if active {
+		status = metav1.ConditionTrue
+	}
+	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: status, Reason: reason, Message: message, ObservedGeneration: tc.Generation})
+	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
+}
+
+// activatedBaselineMessage explains an activation whose node does not (yet) run the
+// authority's effective policy: either its own TalosConfig's render, or a drifted live
+// configuration. Both are converged by the owner's in-place update.
+func activatedBaselineMessage(baseline string, drift []string) string {
+	switch baseline {
+	case op.BaselineCurrent:
+		return "live configuration matches the current TalosConfig render; the owner's in-place update converges it to the effective policy"
+	case op.BaselineDrift:
+		return "live configuration drifted from the effective policy in: " + strings.Join(drift, ", ") + "; the owner's in-place update converges it"
+	}
+	return ""
+}
+
+// activationFailure publishes why an observation did not complete. Stage errors carry only
+// fixed stage names (pkg/updateoperation.StageError), so the message exposes no private
+// input, configuration bytes or transport detail. The log line is emitted once per distinct
+// message per object; the 2s requeue would otherwise repeat it indefinitely.
+func (r *TalosConfigReconciler) activationFailure(ctx context.Context, tc *bootstrapv1.TalosConfig, reason string, cause error) error {
+	message := cause.Error()
+	if len(message) > 512 {
+		message = message[:512]
+	}
+	if previous := conditions.Get(tc, bootstrapv1.ActivationReadyCondition); previous == nil || previous.Message != message || previous.Reason != reason {
+		r.Log.Info("Talos observation not complete", "talosconfig", client.ObjectKeyFromObject(tc).String(), "reason", reason, "stage", message)
+	}
+	helper, err := patch.NewHelper(tc, r.Client)
+	if err != nil {
+		return err
+	}
+	conditions.Set(tc, metav1.Condition{Type: bootstrapv1.ActivationReadyCondition, Status: metav1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: tc.Generation})
+	return helper.Patch(ctx, tc, patch.WithStatusObservedGeneration{}, patch.WithOwnedConditions{Conditions: []string{bootstrapv1.ActivationReadyCondition}})
+}

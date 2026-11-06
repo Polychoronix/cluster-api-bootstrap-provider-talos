@@ -5,6 +5,7 @@
 package controllers
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	capiv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -18,6 +19,7 @@ import (
 // Use shared scheme for all calls.
 func init() {
 	utilruntime.Must(capiv1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme.Scheme))
 	utilruntime.Must(bootstrapv1alpha3.AddToScheme(scheme.Scheme))
 	utilruntime.Must(bootstrapv1beta1.AddToScheme(scheme.Scheme))
 	// ExtensionConfig is written by the in-place update registrar, which reaches it through the

@@ -32,6 +32,9 @@ import (
 )
 
 func TestIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("existing-cluster integration is disabled in short mode")
+	}
 	require.NotEmpty(t, TalosVersion)
 
 	ctx, c := setupSuite(t)

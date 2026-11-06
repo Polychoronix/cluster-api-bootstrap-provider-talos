@@ -34,6 +34,7 @@ import (
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/controllers"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/imagefactory"
 	"github.com/siderolabs/cluster-api-bootstrap-provider-talos/internal/inplace"
+	op "github.com/siderolabs/cluster-api-bootstrap-provider-talos/pkg/updateoperation"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -54,6 +55,7 @@ var (
 	runtimeExtensionCertDir string
 
 	enableMachinePoolInPlaceUpdates bool
+	configDriftCheckInterval        time.Duration
 )
 
 const (
@@ -101,6 +103,15 @@ func InitFlags(fs *pflag.FlagSet) {
 			"in-place update flow for MachinePools, so this is implemented by CABPT rather than through the "+
 			"runtime extension hooks. Set to false to keep a pool's rendered configuration frozen once written.")
 
+	fs.DurationVar(&configDriftCheckInterval, "config-drift-check-interval", 30*time.Minute,
+		"How often an activated TalosConfig's node is re-observed and its live configuration compared with the TalosConfig render, reported on the ConfigDrift condition only; 0 disables.")
+
+	fs.DurationVar(&op.WorkloadAPITimeout, "workload-api-timeout", op.WorkloadAPITimeout,
+		"Per-request timeout for the workload cluster API (Node reads, control-plane Node inventory, /readyz) "+
+			"used by Talos management observation, activation validation and the in-place executor. A failed "+
+			"read is waited out, never treated as a changed Node identity. Raise it when the workload API is "+
+			"reached through a slow proxy.")
+
 	fs.StringVar(&imageFactoryURL, "image-factory-url", imagefactory.DefaultURL,
 		"Base URL of the Talos Image Factory used to register the schematic declared in a TalosConfig's "+
 			"spec.imageFactory and to resolve its Talos version. The host of this URL becomes the registry in "+
@@ -118,6 +129,10 @@ func main() {
 
 	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
 		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+	if op.WorkloadAPITimeout <= 0 {
+		setupLog.Error(fmt.Errorf("--workload-api-timeout must be positive"), "invalid flags")
 		os.Exit(1)
 	}
 
@@ -204,6 +219,7 @@ func setupReconcilers(ctx context.Context, mgr manager.Manager) {
 		Scheme:                    mgr.GetScheme(),
 		WatchFilterValue:          watchFilterValue,
 		MachinePoolInPlaceUpdates: enableMachinePoolInPlaceUpdates,
+		ConfigDriftCheckInterval:  configDriftCheckInterval,
 		NodeClientFactory:         inplace.NewNodeClient(mgr.GetClient()),
 		ImageFactory:              imagefactory.NewCached(factoryClient, 10*time.Minute),
 	}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 10}); err != nil {
@@ -214,7 +230,7 @@ func setupReconcilers(ctx context.Context, mgr manager.Manager) {
 	if enableRuntimeExtension {
 		setupLog.Info("enabling the in-place update runtime extension", "port", runtimeExtensionPort)
 
-		handler := inplace.NewHandler(mgr.GetClient(), inplace.NewNodeClient(mgr.GetClient()))
+		handler := inplace.NewHandler(mgr.GetClient(), mgr.GetAPIReader(), inplace.NewOperationNodeClient(mgr.GetAPIReader()))
 
 		if err := inplace.AddToManager(mgr, handler, inplace.Options{
 			Port:    runtimeExtensionPort,

@@ -1,3 +1,230 @@
+## CRACI integration changes — v0.9.0-craci.13
+
+- Lockstep with CACPPT v0.9.0-craci.13, no code change. CACPPT craci.13 grants its
+  manager role the `delete` verb on Secrets so a Consumed in-place owner plan can be
+  removed.
+
+## CRACI integration changes — v0.9.0-craci.12
+
+- An `Ambiguous` in-place journal whose Apply step was issued is settled by
+  observation instead of always demanding intervention. On each later
+  `UpdateMachine` call (after the pause check and the frozen-identity guard, and for
+  a never-acknowledged step only once its deadline has passed, so no runner can still
+  act on it) the node is observed: running the requested configuration (document by
+  document, order-insensitive) proves the apply landed, and once the normal recovery
+  witnesses hold the journal completes as `Observed` with its receipt in one
+  compare-and-swap (`SettleAmbiguousJournal`, the only transition out of `Ambiguous`),
+  the Apply outcome taken from the boot witness when it was never acknowledged
+  (unchanged boot: `NoReboot`; rebooted since issuance: `RebootRequired`). A
+  never-acknowledged Apply whose node still runs the configuration recorded when the
+  operation was planned (new journal field `baselineDigest`, an order-insensitive
+  document digest) never landed: the journal is discarded and re-planned. Anything
+  else stays `Ambiguous`, now with the reason (`… intervention required: live
+  configuration matches neither … differs from the requested one in <document
+  ids>`). Each outcome is logged once (`ambiguous in-place operation settlement`,
+  `transactionID`, `outcome` applied/never-landed/unresolved). Journals planned before
+  this release carry no baseline, so only the landed outcome settles them; journals
+  whose later steps (installer pull/install/reboot) were never issued are not settled
+  as applied. Completion checks now use the same order-insensitive comparator as
+  drift and activation (`activeConfigurationMatches`).
+- In-place completion no longer fails forever with `Talos update operation Secret CAS
+  conflict failed`. The journal had no other writer and was read uncached at the start
+  of every `UpdateMachine` call; the completion evaluation (recovery witnesses, etcd
+  and workload API reads through a slow proxy, two identity guards, image acceptance)
+  outran Cluster API's 10s hook timeout, the request context was cancelled, and the
+  final write failed on it — reported as a CAS conflict because `PatchData` labelled
+  every failed write that way. Now: `UpdateMachine` evaluations run detached from the
+  hook request, one at a time per Machine (later calls join the running one; a caller
+  whose request ends first is asked to call again), bounded at 3 minutes and by the
+  manager's lifetime; the handler registers the maximum `timeoutSeconds: 30`; the
+  completion (and ambiguous-settlement) write re-reads the journal uncached and
+  compares-and-swaps on that fresh resourceVersion when the stored journal is still
+  exactly the one decided on (already completed by a concurrent evaluation counts as
+  done); `PatchData` reports `ErrSecretConflict` only for a lost compare-and-swap
+  (409/422), `Secret write interrupted by the caller's deadline` for a cancelled
+  context, and `Secret write rejected (<reason>)` otherwise.
+
+## CRACI integration changes — v0.9.0-craci.11
+
+- An in-place operation that was never issued is never terminal. Any failure before
+  the first step reached the node (the request no longer validating against the
+  activated management record, stale frozen inputs, a replaced Node) used to mark
+  the planned journal `Ambiguous`, and `UpdateMachine` then answered `operation
+  outcome ambiguous; intervention required` forever although nothing had been
+  applied (seen live after a management record was re-created mid-transaction).
+  A journal whose steps are all still `Planned` is now discarded (UID and
+  resourceVersion guarded, so a concurrent issuance wins) and the next poll plans
+  afresh; journals left `Ambiguous` with only `Planned` steps by earlier releases are
+  discarded the same way. `Ambiguous` is kept for transactions with an issued step
+  whose outcome cannot be verified. docs/in-place-updates.md describes the manual
+  clearing sequence for that genuinely ambiguous case.
+- A slow or unreachable workload API is waited out, never reported as a changed Node.
+  Every workload Node read (activation validation, management observation, the
+  in-place executor) used a 5s per-request timeout and a controller-runtime client
+  that runs API discovery (`/api`, `/apis`, `/api/v1`) before the read; through the
+  tailnet API proxy this timed out (`context deadline exceeded while reading body`).
+  The activation check then reported `activated workload Node identity changed` for
+  what was a failed lookup, and the executor `operation workload Node observation
+  failed`; inside an issued transaction the guard turned it into a terminal
+  `Ambiguous`. Now: one typed Node request without discovery; a new
+  `--workload-api-timeout` (default `15s`, was a fixed 5s); a failed lookup is
+  `activated workload Node lookup failed: <node>: timed out (limit 15s)` /
+  `API status 503 ServiceUnavailable` / `transport error`, wraps
+  `ErrWorkloadUnavailable`, and makes `UpdateMachine` answer "waiting for the workload
+  API" (no stale-journal judgement, no ambiguity); the issuing runner's pre- and
+  post-RPC guards retry until the step deadline. `identity changed` is kept for a Node
+  that is gone or has another UID/providerID and now names it (`<node>: UID a -> b`).
+  CACPPT runs this package in-process and picks up the default on its next CABPT bump.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.10
+
+- An activated management record follows node lifecycle instead of wedging. Before,
+  any difference between the activated safety snapshot and a fresh observation (a
+  control plane reset and rejoined etcd under a new member ID, a new boot ID, a
+  re-registered Node) failed every re-observation with `Talos management activated
+  safety snapshot changed failed`, and only deleting the record unlocked it. A fresh,
+  fully verified observation now replaces the activated snapshot when it differs only
+  in node lifecycle (Node UID, boot ID, live configuration, OS/kubelet/extensions),
+  etcd membership, credential metadata or re-verified intent; the activation and its
+  accepted images carry over, and the controller logs `re-snapshotting activated Talos
+  management after a node lifecycle change` with the changes (`tiikerinpentu: boot ID
+  … -> …`, `etcd tiikerinpentu: member … -> …`). Identity-class changes stay
+  fail-closed and are now named in the error: authority, Cluster UID/name/inputs,
+  kubeconfig and talosconfig trust identity, member inventory, a member's
+  Machine/TalosConfig/InfraMachine/Node name/provider ID/original seed, and the trust
+  identity in a member's live configuration (machine, etcd and Kubernetes CAs,
+  discovery cluster ID and secret).
+
+## Unreleased CRACI integration changes — v0.9.0-craci.9
+
+- Observation failures name the member, the endpoint it was dialed through and the
+  client-side failure: `Talos management actual Talos observation failed: <machine>
+  via <address> (tls <serverName>): Talos boot identity observation failed: connection
+  error: desc = "transport: …"`. The same detail is attached to the `Talos transport`,
+  etcd observation and `API health` stages. Only client-generated text is kept (the dial
+  result of an Unavailable status: DNS, TCP, TLS handshake and certificate verification;
+  otherwise the gRPC code), server status text is never copied and upstream errors are
+  never retained as causes (`talosclient.FailureDetail`).
+
+## Unreleased CRACI integration changes — v0.9.0-craci.8
+
+- **Drift to converge.** Under `manage: true` live edits are not persisted: a
+  node whose live configuration matches neither the authority's effective
+  policy nor its own `TalosConfig` render is activated (snapshot `baseline:
+  drift` plus the differing document identities), `ActivationReady` and
+  `ConfigDrift=True` name those documents, and the owner's in-place update
+  converges the node. Only identity-class checks (trust CA, role, kubelet and
+  boot witnesses, Kubernetes version, requested-vs-live spec) remain hard
+  `BaselineMismatch` blocks. Convergence applies the full desired configuration
+  with `ApplyConfiguration` AUTO: reboot-class deltas (install, volume layout)
+  reboot the node, exactly as any TalosControlPlane spec change does today.
+- **Pause.** The standard CAPI `cluster.x-k8s.io/paused` annotation on the
+  TalosConfig, Machine or Cluster (and `Cluster.spec.paused`) stops activation,
+  apply and convergence; `ConfigDrift` keeps being observed and reported while
+  paused so an operator sees what an unpause converges. See README "Pausing
+  management for a live edit".
+- `ConfigDrift` goes to `ObservationPending` while an in-place update is in
+  progress and is re-observed immediately after it completes, so a stale
+  `ConfigDrifted` never offers the owner a second update; the `ActivationReady`
+  drift message clears once that observation finds no difference.
+- Diagnosability: `StageError` carries a bounded detail; `ActivationPending`
+  and `ActivationInvalid` on a TalosConfig name the failing stage.
+- Activation record stability: the `<cluster>-talosconfig` source is pinned by
+  its trust identity (selected context CA, client certificate and key), not by
+  the whole-Secret digest, so the endpoint regeneration that follows every
+  control-plane membership change no longer invalidates every activation record
+  (`ActivationInvalid` on unrelated nodes). A CA or credential change still
+  invalidates. Snapshots taken before this release keep their whole-digest
+  semantics until the next re-observation re-snapshots them.
+- Deferred: an explicit opt-in to adopt a node's live configuration as the
+  recorded baseline (instead of converging it) is not implemented; pausing is
+  the supported way to hold a live edit.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.7
+
+- Lockstep with CACPPT v0.9.0-craci.7, no code change. CACPPT runs this
+  module's `pkg/updateoperation` in-process for TalosControlPlane observation,
+  so the craci.6 activation-policy and baseline changes reach a control plane
+  only once CACPPT vendors craci.6 (it did not until its craci.7). Release
+  checklist: bump CACPPT's CABPT require/replace and `CABPT_VERSION` before
+  tagging a CACPPT release that depends on a change here.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.6
+
+- Activation policy understands `TalosControlPlane.spec.controlPlaneConfig.members`
+  (CACPPT craci.5): the live authority policy for a Machine is the shared
+  `controlplane` spec plus the overlay of the member it occupies (member label,
+  else Machine name), merged exactly as CACPPT's `EffectiveTalosConfigSpec`
+  does (a contract test pins the mirror). Before, every member Machine failed
+  observation with `effective input differs from live authority policy` and a
+  control plane with members could never (re-)activate.
+- Baseline tolerance: observation accepts a node whose live configuration
+  matches the Machine's **current** `TalosConfig` render when it no longer
+  matches the effective policy (the state an in-place update starts from). The
+  activation snapshot records which rendering matched; `ActivationReady` on a
+  control-plane child carries a message when the current render matched.
+  Configurations are compared document by document (order-insensitive), so a
+  live `talosctl patch` that appended documents no longer counts as a mismatch.
+- Report-only configuration drift: activated `TalosConfig`s are re-observed on
+  `--config-drift-check-interval` (default 30m, 0 disables) and carry a
+  `ConfigDrift` condition (`ConfigDrifted` with differing document identities,
+  `NoDrift`, `ObservationPending`). Nothing is applied from this path.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.5
+
+- Observation failures are diagnosable: `ActivationReady=False` now carries the
+  fixed stage name (`Talos management <stage> failed`) as its message and the
+  controller logs `Talos observation not complete` (keys `talosconfig`, `reason`,
+  `stage`) once per distinct failure. Post-dial comparison failures (active
+  configuration, trust identity, kubelet/boot witnesses, role, version) use reason
+  `BaselineMismatch`; precondition, lookup and transport failures keep
+  `ObservationPending`. Stage names are constants and never embed private data.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.4
+
+- Admission webhook: `TalosConfig.spec` fields that only name private inputs,
+  consent or transport are mutable on an existing object —
+  `strategicPatchSecretRefs`, `configRevision`, `talosEndpoint`, `manage` and
+  the `machineConfig` overlay's `configRevision`/`strategicPatchSecretRefs`.
+  The original seed is never re-rendered after `DataSecretCreated` and
+  activation re-resolves the references live, failing closed on divergence, so
+  these edits cannot mutate a node. Configuration-defining fields
+  (`generateType`, `talosVersion`, `data`, `configSecretRef`, patches,
+  `hostname`, `imageFactory`) stay immutable outside the owner-driven in-place
+  update flow.
+
+## Unreleased CRACI integration changes — v0.9.0-craci.3
+
+- Unify native standalone, MachineSet and TalosControlPlane nodes under
+  bootstrap → observe → activate → requested update.
+- Replace management modes, inventory revisions, manifest approval tokens and
+  duplicated status with default-false `spec.manage` and `ActivationReady`.
+  Both served APIs and templates preserve boolean consent through conversion.
+- Remove bootstrap `acceptedIntent` receipts, creation-origin lineage markers,
+  owner-kind bypasses and hand-installed-node owner-transfer machinery. Existing
+  hosts are replaced through their infrastructure provider, not adopted.
+- Preserve original CABPT seed UID/bytes and imported cluster identity. Native
+  generation can reuse existing bundle Secrets and ordered private multidoc
+  patches without requiring an imported full baseline.
+- Require exact uncached CAPI/Node/Infra ownership, active configuration equality,
+  trusted Talos CA, actual kubelet-image and matching Node/Talos boot-ID witnesses.
+  Complete healthy voting etcd views fence aggregate control-plane activation.
+- Bind generation sources to complete Secret data and key references to exact
+  key data; keep private fingerprints and payloads out of public objects/errors.
+- Keep immutable activation snapshots and one mutable accepted-image record.
+  Advance image state only after every operation step is observed, then publish
+  the journal completion receipt. Preserve single issuance, recovery waits,
+  consumed-receipt cleanup and strict pause/identity fences.
+- Preserve native per-Machine Talos transports while shared TCP policy changes;
+  runtime output remains separate from the immutable initial seed.
+- Add real standalone release-controller rendering with private registry/Tailscale
+  multidoc patches, mandatory-witness regressions and disposable API admission,
+  conversion, finalization and owner/runtime coupling coverage.
+- Retain the serving-CA fix for both mutating and validating webhooks, pinned
+  native release tooling, personal-fork OCI provenance and checksum/digest-based
+  packaging. No push, tag, live rollout or automatic physical/Ceph cleanup is
+  performed by this source cutover.
+
 ## [CAPI Bootstrap Provider Talos 0.7.0-alpha.2](https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/tag/v0.7.0-alpha.2) (2026-04-27)
 
 Welcome to the v0.7.0-alpha.2 release of CAPI Bootstrap Provider Talos!  

@@ -13,10 +13,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 )
+
+func newPlanHandler() *Handler {
+	c := fake.NewClientBuilder().Build()
+	return NewHandler(c, c, NewOperationNodeClient(c))
+}
 
 // talosConfig builds a TalosConfig as it arrives on the wire.
 func talosConfig(spec map[string]any) runtime.RawExtension {
@@ -155,7 +161,7 @@ func TestCanUpdateMachine_BootstrapConfig(t *testing.T) {
 			current := talosConfig(tt.current)
 			desired := talosConfig(tt.desired)
 
-			h := &Handler{}
+			h := newPlanHandler()
 			resp := &runtimehooksv1.CanUpdateMachineResponse{}
 
 			h.DoCanUpdateMachine(context.Background(), &runtimehooksv1.CanUpdateMachineRequest{
@@ -225,7 +231,7 @@ func TestCanUpdateMachine_InfrastructureMachine(t *testing.T) {
 			current := tinkerbellMachine(tt.current)
 			desired := tinkerbellMachine(tt.desired)
 
-			h := &Handler{}
+			h := newPlanHandler()
 			resp := &runtimehooksv1.CanUpdateMachineResponse{}
 
 			h.DoCanUpdateMachine(context.Background(), &runtimehooksv1.CanUpdateMachineRequest{
@@ -261,7 +267,7 @@ func TestCanUpdateMachine_UnknownInfraProviderIsDeclined(t *testing.T) {
 		"spec":       map[string]any{"customImage": "new"},
 	})
 
-	h := &Handler{}
+	h := newPlanHandler()
 	resp := &runtimehooksv1.CanUpdateMachineResponse{}
 
 	h.DoCanUpdateMachine(context.Background(), &runtimehooksv1.CanUpdateMachineRequest{
@@ -277,7 +283,7 @@ func TestCanUpdateMachine_UnknownInfraProviderIsDeclined(t *testing.T) {
 func TestCanUpdateMachine_KubernetesVersion(t *testing.T) {
 	t.Parallel()
 
-	h := &Handler{}
+	h := newPlanHandler()
 	resp := &runtimehooksv1.CanUpdateMachineResponse{}
 
 	h.DoCanUpdateMachine(context.Background(), &runtimehooksv1.CanUpdateMachineRequest{
@@ -316,7 +322,7 @@ func TestCanUpdateMachineSet_UsesTemplateSpecPaths(t *testing.T) {
 		},
 	})
 
-	h := &Handler{}
+	h := newPlanHandler()
 	resp := &runtimehooksv1.CanUpdateMachineSetResponse{}
 
 	h.DoCanUpdateMachineSet(context.Background(), &runtimehooksv1.CanUpdateMachineSetRequest{

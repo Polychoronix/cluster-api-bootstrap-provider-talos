@@ -63,22 +63,20 @@ FROM scratch AS integration-test
 COPY --from=integration-test-build /src/integration.test /integration.test
 
 FROM --platform=${BUILDPLATFORM} alpine:3.21 AS release-build
-ADD https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv4.1.0/kustomize_v4.1.0_linux_amd64.tar.gz .
+ADD --checksum=sha256:77263c66afd04106348bebd019096933e26c0054d5b0ade8265f3426cf440ae6 https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv4.1.0/kustomize_v4.1.0_linux_amd64.tar.gz .
 RUN  tar -xf kustomize_v4.1.0_linux_amd64.tar.gz -C /usr/local/bin && rm kustomize_v4.1.0_linux_amd64.tar.gz
+WORKDIR /src
 COPY ./config ./config
+COPY ./hack/release-manifests.sh ./hack/release-manifests.sh
 ARG REGISTRY_AND_USERNAME
 ARG NAME
 ARG TAG
-RUN cd config/manager \
-  && kustomize edit set image controller=${REGISTRY_AND_USERNAME}/${NAME}:${TAG} \
-  && cd - \
-  && kustomize build config/default > /bootstrap-components.yaml \
-  && cp config/metadata/metadata.yaml /metadata.yaml
+ARG CONTROLLER_IMAGE
+RUN KUSTOMIZE=/usr/local/bin/kustomize sh ./hack/release-manifests.sh "${TAG}" "${CONTROLLER_IMAGE:-${REGISTRY_AND_USERNAME}/${NAME}:${TAG}}" /release
 
 FROM scratch AS release-manifests
 ARG TAG
-COPY --from=release-build /bootstrap-components.yaml /bootstrap-talos/${TAG}/bootstrap-components.yaml
-COPY --from=release-build /metadata.yaml /bootstrap-talos/${TAG}/metadata.yaml
+COPY --from=release-build /release/bootstrap-talos/${TAG}/ /bootstrap-talos/${TAG}/
 
 FROM build AS binary
 ARG TARGETARCH
@@ -89,5 +87,11 @@ FROM scratch AS container
 COPY --from=pkg-ca-certificates / /
 COPY --from=pkg-fhs / /
 COPY --from=binary /manager /manager
-LABEL org.opencontainers.image.source https://github.com/sidero-community/cluster-api-bootstrap-provider-talos
+ARG SOURCE_URL=https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos
+ARG REVISION
+ARG TAG
+LABEL org.opencontainers.image.source=${SOURCE_URL}
+LABEL org.opencontainers.image.revision=${REVISION}
+LABEL org.opencontainers.image.version=${TAG}
+LABEL org.opencontainers.image.licenses=MPL-2.0
 ENTRYPOINT [ "/manager" ]

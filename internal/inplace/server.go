@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -26,18 +28,24 @@ type runtimeRawExtension = runtime.RawExtension
 // Handler serves the Cluster API in-place update hooks for Talos machines.
 type Handler struct {
 	client        client.Client
-	newNodeClient NodeClientFactory
-	upgrades      *upgradeTracker
+	reader        client.Reader
+	newNodeClient OperationNodeFactory
+	runner        *operationRunner
+	// settlements records the ambiguous-journal settlement outcomes already logged.
+	settlements sync.Map
+	// evaluations holds the running UpdateMachine evaluation per Machine (namespace/name).
+	evaluationsMu sync.Mutex
+	evaluations   map[string]*updateEvaluation
 }
 
-// NewHandler builds a Handler backed by the management cluster client c, opening Talos
-// connections through factory. Passing a fake factory is how the update state machine is
-// tested without hardware.
-func NewHandler(c client.Client, factory NodeClientFactory) *Handler {
+// NewHandler separates write access from the uncached reader used for operation guards.
+// Production callers must pass manager.GetAPIReader, not the reconcile cache.
+func NewHandler(c client.Client, reader client.Reader, factory OperationNodeFactory) *Handler {
 	return &Handler{
 		client:        c,
+		reader:        reader,
 		newNodeClient: factory,
-		upgrades:      newUpgradeTracker(),
+		runner:        newOperationRunner(),
 	}
 }
 
@@ -59,6 +67,9 @@ type Options struct {
 // Cluster API reaches these hooks through an ExtensionConfig pointing at this server; see
 // config/runtime-extension for the manifests.
 func AddToManager(mgr manager.Manager, handler *Handler, opts Options) error {
+	if err := mgr.Add(handler); err != nil {
+		return err
+	}
 	catalog := runtimecatalog.New()
 	if err := runtimehooksv1.AddToCatalog(catalog); err != nil {
 		return fmt.Errorf("failed to build runtime hook catalog: %w", err)
@@ -89,6 +100,9 @@ func AddToManager(mgr manager.Manager, handler *Handler, opts Options) error {
 			Hook:        runtimehooksv1.UpdateMachine,
 			Name:        "update-machine",
 			HandlerFunc: handler.DoUpdateMachine,
+			// The longest Cluster API allows: completing an operation reads the workload
+			// API, Talos and etcd several times. Longer evaluations continue detached.
+			TimeoutSeconds: ptr.To[int32](30),
 		},
 	}
 

@@ -1,10 +1,17 @@
 REGISTRY ?= ghcr.io
-USERNAME ?= sidero-community
+USERNAME ?= polychoronix
 SHA ?= $(shell git describe --match=none --always --abbrev=8 --dirty)
 TAG ?= $(shell git describe --tag --always --dirty)
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 REGISTRY_AND_USERNAME := $(REGISTRY)/$(USERNAME)
 NAME := cluster-api-talos-controller
+CONTROLLER_IMAGE ?= $(REGISTRY_AND_USERNAME)/$(NAME):$(TAG)
+SOURCE_URL ?= https://github.com/Polychoronix/cluster-api-bootstrap-provider-talos
+REVISION ?= $(shell git rev-parse HEAD)
+BUILD_METADATA ?= $(ARTIFACTS)/image-metadata.json
+KUSTOMIZE ?= kustomize
+CONTROLLER_GEN ?= controller-gen
+CONVERSION_GEN ?= conversion-gen
 
 ARTIFACTS := _out
 TEST_RUN ?= ./...
@@ -14,7 +21,7 @@ PKGS ?= v1.14.0
 TALOS_VERSION ?= v1.14.0
 K8S_VERSION ?= 1.37.0
 
-KRES_IMAGE ?= ghcr.io/siderolabs/kres:latest
+KRES_REVISION := 15ff2fda3c9184427ef4f8ba0e2b94389b0f8dc7
 
 CONTROLLER_GEN_VERSION ?= v0.21.0
 CONVERSION_GEN_VERSION ?= v0.36.0
@@ -35,6 +42,9 @@ COMMON_ARGS += --build-arg=CONTROLLER_GEN_VERSION=$(CONTROLLER_GEN_VERSION)
 COMMON_ARGS += --build-arg=CONVERSION_GEN_VERSION=$(CONVERSION_GEN_VERSION)
 COMMON_ARGS += --build-arg=TALOS_VERSION=$(TALOS_VERSION)
 COMMON_ARGS += --build-arg=ARTIFACTS=$(ARTIFACTS)
+COMMON_ARGS += --build-arg=CONTROLLER_IMAGE=$(CONTROLLER_IMAGE)
+COMMON_ARGS += --build-arg=SOURCE_URL=$(SOURCE_URL)
+COMMON_ARGS += --build-arg=REVISION=$(REVISION)
 
 all: manifests container
 
@@ -83,8 +93,9 @@ generate: ## Generate source code.
 	@$(MAKE) local-$@ DEST=./ PLATFORM=linux/amd64
 
 .PHONY: container
-container: generate ## Build the container image.
-	@$(MAKE) docker-$@ TARGET_ARGS="--push=$(PUSH)"
+container: generate ## Build the controller image; publication requires PUSH=true explicitly.
+	@mkdir -p $(ARTIFACTS)
+	@$(MAKE) docker-$@ TARGET_ARGS="--push=$(PUSH) --metadata-file=$(BUILD_METADATA)"
 
 .PHONY: manifests
 manifests: ## Generate manifests (e.g. CRD, RBAC, etc.).
@@ -96,8 +107,17 @@ release-notes: ## Create the release notes.
 	ARTIFACTS=$(ARTIFACTS) ./hack/release.sh $@ $(ARTIFACTS)/RELEASE_NOTES.md $(TAG)
 
 .PHONY: release-manifests
-release-manifests:
-	@$(MAKE) local-$@ DEST=./$(ARTIFACTS) PLATFORM=linux/amd64
+release-manifests: ## Render credential-free components for the explicitly supplied TAG/image.
+	@KUSTOMIZE="$(KUSTOMIZE)" sh ./hack/release-manifests.sh "$(TAG)" "$(CONTROLLER_IMAGE)" "$(ARTIFACTS)"
+
+.PHONY: generate-local manifests-local
+generate-local: ## Generate API source with installed pinned controller/conversion generators.
+	@$(CONTROLLER_GEN) object:headerFile=./hack/boilerplate.go.txt paths="./api/..."
+	@$(CONVERSION_GEN) --output-file=zz_generated.conversion.go --go-header-file=./hack/boilerplate.go.txt ./api/v1alpha3
+
+manifests-local: ## Generate CRD/webhook/RBAC manifests with the installed pinned generator.
+	@$(CONTROLLER_GEN) crd:crdVersions=v1 paths="./api/..." output:crd:dir=config/crd/bases output:webhook:dir=config/webhook webhook
+	@$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./controllers/..." output:rbac:dir=config/rbac
 
 .PHONY: release
 release: manifests container release-notes release-manifests ## Create the release YAML. The build result will be ouput to the specified local destination.
@@ -159,6 +179,5 @@ env-down: talosctl ## Stop development environment.
 	rm -f talosconfig kubeconfig
 
 .PHONY: rekres
-rekres:
-	@docker pull $(KRES_IMAGE)
-	@docker run --rm --net=host --user $(shell id -u):$(shell id -g) -v $(PWD):/src -w /src -e GITHUB_TOKEN $(KRES_IMAGE)
+rekres: ## Regenerate only ci.yaml with the exact native generator, without GitHub API writes.
+	@KRES_REVISION="$(KRES_REVISION)" sh ./hack/rekres.sh

@@ -135,6 +135,100 @@ func TestValidateUpdate_UnchangedSpecIsAlwaysAdmitted(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Fields that only name private inputs, consent or transport may change on a bootstrapped
+// object: the seed is never re-rendered and activation re-resolves them live, fail-closed.
+func TestValidateUpdate_InputReferenceFieldsAreMutable(t *testing.T) {
+	t.Parallel()
+
+	base := bootstrapv1beta1.TalosConfigSpec{
+		GenerateType: "worker",
+		TalosVersion: "v1.14",
+		Hostname:     bootstrapv1beta1.HostnameSpec{Source: bootstrapv1beta1.HostnameSourceMachineName},
+		StrategicPatchSecretRefs: []bootstrapv1beta1.SecretKeyReference{
+			{Name: "registry-auth", Key: "patch"},
+			{Name: "kissanpentu-tailscale-patch", Key: "patch"},
+		},
+		TalosEndpoint: &bootstrapv1beta1.TalosEndpoint{Address: "robot-test-talos-access:50000", ServerName: "robot-test.example.ts.net"},
+	}
+
+	for name, mutate := range map[string]func(*bootstrapv1beta1.TalosConfigSpec){
+		"manage flip": func(s *bootstrapv1beta1.TalosConfigSpec) { s.Manage = true },
+		"patch secret ref rename": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.StrategicPatchSecretRefs[1].Name = "kissanpentu-robot-test-tailscale-patch"
+		},
+		"patch secret ref added": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.StrategicPatchSecretRefs = append(s.StrategicPatchSecretRefs, bootstrapv1beta1.SecretKeyReference{Name: "extra", Key: "patch"})
+		},
+		"config revision": func(s *bootstrapv1beta1.TalosConfigSpec) { s.ConfigRevision = "2" },
+		"talos endpoint": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.TalosEndpoint = &bootstrapv1beta1.TalosEndpoint{Address: "egress:50000", ServerName: "robot-test.example.ts.net"}
+		},
+		"machine overlay revision and refs": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.MachineConfig = &bootstrapv1beta1.MachineConfigOverlay{
+				ConfigRevision:           "7",
+				StrategicPatchSecretRefs: []bootstrapv1beta1.SecretKeyReference{{Name: "per-machine", Key: "patch"}},
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			old := config(nil, *base.DeepCopy())
+			spec := *base.DeepCopy()
+			mutate(&spec)
+			updated := config(nil, spec)
+
+			_, err := updated.ValidateUpdate(updateContext(), old, updated)
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+// Everything that defines the generated configuration stays immutable for user-driven writes.
+func TestValidateUpdate_ConfigurationDefiningFieldsStayImmutable(t *testing.T) {
+	t.Parallel()
+
+	base := bootstrapv1beta1.TalosConfigSpec{
+		GenerateType:     "worker",
+		TalosVersion:     "v1.14",
+		Hostname:         bootstrapv1beta1.HostnameSpec{Source: bootstrapv1beta1.HostnameSourceMachineName},
+		StrategicPatches: []string{"machine:\n  network: {}\n"},
+		MachineConfig:    &bootstrapv1beta1.MachineConfigOverlay{ConfigRevision: "1"},
+	}
+
+	for name, mutate := range map[string]func(*bootstrapv1beta1.TalosConfigSpec){
+		"generateType flip": func(s *bootstrapv1beta1.TalosConfigSpec) { s.GenerateType = "controlplane" },
+		"talosVersion bump": func(s *bootstrapv1beta1.TalosConfigSpec) { s.TalosVersion = "v1.15" },
+		"hostname source": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.Hostname.Source = bootstrapv1beta1.HostnameSourceInfrastructureName
+		},
+		"public patch": func(s *bootstrapv1beta1.TalosConfigSpec) { s.StrategicPatches[0] = "machine:\n  time: {}\n" },
+		"baseline secret ref": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.ConfigSecretRef = &bootstrapv1beta1.SecretKeyReference{Name: "baseline", Key: "config"}
+		},
+		"machine overlay public patch": func(s *bootstrapv1beta1.TalosConfigSpec) {
+			s.MachineConfig.StrategicPatches = []string{"machine:\n  sysctls: {}\n"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			old := config(nil, *base.DeepCopy())
+			spec := *base.DeepCopy()
+			mutate(&spec)
+			// A concurrent manage flip must not launder a configuration change.
+			spec.Manage = true
+			updated := config(nil, spec)
+
+			_, err := updated.ValidateUpdate(updateContext(), old, updated)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "immutable")
+		})
+	}
+}
+
 // Exempting the immutability check must not exempt the rest of validation.
 func TestValidateUpdate_StillValidatesDuringInPlaceUpdate(t *testing.T) {
 	t.Parallel()

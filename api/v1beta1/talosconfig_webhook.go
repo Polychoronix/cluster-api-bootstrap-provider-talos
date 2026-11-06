@@ -22,12 +22,22 @@ import (
 func (r *TalosConfig) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, r).
 		WithValidator(r).
+		WithDefaulter(r).
 		Complete()
 }
 
 //+kubebuilder:webhook:verbs=create;update,path=/validate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfig,mutating=false,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigs,versions=v1beta1,name=vtalosconfig.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*TalosConfig] = &TalosConfig{}
+
+//+kubebuilder:webhook:verbs=create;update,path=/mutate-bootstrap-cluster-x-k8s-io-v1beta1-talosconfig,mutating=true,failurePolicy=fail,groups=bootstrap.cluster.x-k8s.io,resources=talosconfigs,versions=v1beta1,name=mtalosconfig.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+
+var _ admission.Defaulter[*TalosConfig] = &TalosConfig{}
+
+// Default leaves management consent false unless explicitly supplied.
+func (r *TalosConfig) Default(_ context.Context, _ *TalosConfig) error {
+	return nil
+}
 
 // ValidateCreate implements admission.Validator so a webhook will be registered for the type
 func (r *TalosConfig) ValidateCreate(ctx context.Context, obj *TalosConfig) (admission.Warnings, error) {
@@ -67,7 +77,7 @@ func (r *TalosConfig) ValidateUpdate(ctx context.Context, oldObj *TalosConfig, n
 	// through the in-place update flow; for anything else it is a silent no-op.
 	specManagedByController := topology.IsDryRunRequest(req, r) || IsInPlaceUpdate(r) || isTopologyOwned(r)
 
-	if !specManagedByController && !cmp.Equal(r.Spec, old.Spec) {
+	if !specManagedByController && !cmp.Equal(immutableSpec(r.Spec), immutableSpec(old.Spec)) {
 		return nil, apierrors.NewBadRequest("TalosConfig.Spec is immutable")
 	}
 
@@ -87,6 +97,41 @@ func isTopologyOwned(obj metav1.Object) bool {
 	return ok
 }
 
+// immutableSpec strips the fields a user may change on an existing TalosConfig, leaving the
+// ones that define the generated machine configuration: role, generation contract, baseline,
+// public patches, hostname and image identity. Those stay immutable for user-driven writes
+// because only the owner-driven in-place flow can realise them on a running node; an admitted
+// edit would otherwise sit inert on the object.
+//
+// The stripped fields never change what was rendered:
+//   - manage is consent, not configuration;
+//   - configRevision and strategicPatchSecretRefs (shared and per-Machine) name where private
+//     inputs come from. The original seed is never re-rendered once
+//     Status.Initialization.DataSecretCreated is set, and activation re-resolves the current
+//     references live and fails closed when the result differs from the running configuration,
+//     so a reference or revision change can be admitted without ever mutating a node;
+//   - talosEndpoint is management transport. It is not part of the rendered configuration and
+//     the observer verifies the dialled node's identity independently of it.
+func immutableSpec(spec TalosConfigSpec) TalosConfigSpec {
+	spec.Manage = false
+	spec.ConfigRevision = ""
+	spec.StrategicPatchSecretRefs = nil
+	spec.TalosEndpoint = nil
+	if spec.MachineConfig != nil {
+		overlay := *spec.MachineConfig
+		overlay.ConfigRevision = ""
+		overlay.StrategicPatchSecretRefs = nil
+		// An overlay that only carried mutable fields is equivalent to no overlay.
+		if cmp.Equal(overlay, MachineConfigOverlay{}) {
+			spec.MachineConfig = nil
+		} else {
+			spec.MachineConfig = &overlay
+		}
+	}
+
+	return spec
+}
+
 func (r *TalosConfig) validate() error {
 	var allErrs field.ErrorList
 
@@ -103,6 +148,7 @@ func (r *TalosConfig) validate() error {
 	}
 
 	allErrs = append(allErrs, ValidateImageFactory(field.NewPath("spec").Child("imageFactory"), r.Spec.ImageFactory)...)
+	allErrs = append(allErrs, ValidateConfigInputs(field.NewPath("spec"), r.Spec)...)
 
 	if len(allErrs) == 0 {
 		return nil

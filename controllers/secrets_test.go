@@ -49,13 +49,14 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "machine-1",
 			Namespace:   "default",
+			UID:         "config-uid",
 			Annotations: annotations,
 		},
 		Spec: bootstrapv1beta1.TalosConfigSpec{GenerateType: "worker"},
 	}
 
 	machine := &capiv1.Machine{
-		ObjectMeta: metav1.ObjectMeta{Name: "machine-1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "machine-1", Namespace: "default", UID: "machine-uid"},
 		Spec:       capiv1.MachineSpec{ClusterName: "test", Version: "v1.34.0"},
 	}
 
@@ -68,21 +69,23 @@ func newSecretsScope(t *testing.T, inPlace bool, existing *corev1.Secret) (*Talo
 
 	owner := &configowner.ConfigOwner{Unstructured: owned}
 
+	c := builder.Build()
 	return &TalosConfigReconciler{
-		Client: builder.Build(),
-		Log:    ctrl.Log.WithName("test"),
-		Scheme: scheme,
-	}, &TalosConfigScope{
-		Config:      config,
-		ConfigOwner: owner,
-		Cluster:     &capiv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}},
-	}
+			Client:    c,
+			APIReader: c,
+			Log:       ctrl.Log.WithName("test"),
+			Scheme:    scheme,
+		}, &TalosConfigScope{
+			Config:      config,
+			ConfigOwner: owner,
+			Cluster:     &capiv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}},
+		}
 }
 
 func existingSecret(data, hash string) *corev1.Secret {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: bootstrapSecretName},
-		Data:       map[string][]byte{"value": []byte(data)},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: bootstrapSecretName, OwnerReferences: []metav1.OwnerReference{{Kind: "TalosConfig", UID: "config-uid"}}},
+		Data:       map[string][]byte{"value": []byte(data), "inputFreshness": []byte(hash)},
 	}
 
 	if hash != "" {
@@ -105,14 +108,15 @@ func TestWriteBootstrapData_CreatesSecretWithHash(t *testing.T) {
 	t.Parallel()
 
 	r, scope := newSecretsScope(t, false, nil)
+	scope.Config.Annotations = map[string]string{capiv1.UpdateInProgressAnnotation: ""}
 
-	name, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v1"), "hash-1")
+	name, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v1"), "hash-1", []byte("hash-1"))
 	require.NoError(t, err)
 	assert.Equal(t, bootstrapSecretName, name)
 
 	secret := readSecret(t, r, scope)
 	assert.Equal(t, "config-v1", string(secret.Data["value"]))
-	assert.Equal(t, "hash-1", secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation])
+	assert.Equal(t, []byte("hash-1"), secret.Data["inputFreshness"])
 }
 
 // Bootstrap data is immutable for the life of a Machine outside an in-place update.
@@ -121,7 +125,7 @@ func TestWriteBootstrapData_LeavesExistingSecretAlone(t *testing.T) {
 
 	r, scope := newSecretsScope(t, false, existingSecret("config-v1", "hash-1"))
 
-	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2")
+	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2", []byte("hash-2"))
 	require.NoError(t, err)
 
 	secret := readSecret(t, r, scope)
@@ -134,13 +138,13 @@ func TestWriteBootstrapData_RegeneratesDuringInPlaceUpdate(t *testing.T) {
 
 	r, scope := newSecretsScope(t, true, existingSecret("config-v1", "hash-1"))
 
-	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2")
+	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2", []byte("hash-2"))
 	require.NoError(t, err)
 
 	secret := readSecret(t, r, scope)
 	assert.Equal(t, "config-v2", string(secret.Data["value"]))
-	assert.Equal(t, "hash-2", secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation],
-		"the new hash is what tells the extension the secret is fresh")
+	assert.Equal(t, []byte("hash-2"), secret.Data["inputFreshness"])
+	assert.Empty(t, secret.Annotations[bootstrapv1beta1.InPlaceConfigHashAnnotation])
 }
 
 // The update runs for many reconciles while the node settles; rewriting an already-current
@@ -152,7 +156,7 @@ func TestWriteBootstrapData_SkipsRewriteWhenHashAlreadyMatches(t *testing.T) {
 
 	before := readSecret(t, r, scope).ResourceVersion
 
-	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2")
+	_, err := r.writeBootstrapData(context.Background(), scope, []byte("config-v2"), "hash-2", []byte("hash-2"))
 	require.NoError(t, err)
 
 	assert.Equal(t, before, readSecret(t, r, scope).ResourceVersion)

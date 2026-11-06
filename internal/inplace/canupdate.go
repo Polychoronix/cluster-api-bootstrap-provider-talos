@@ -11,7 +11,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 )
@@ -27,6 +29,15 @@ const templateSpecPrefix = "spec.template.spec"
 // replacement if anything is left over. See mergePatchForPaths.
 func (h *Handler) DoCanUpdateMachine(ctx context.Context, req *runtimehooksv1.CanUpdateMachineRequest, resp *runtimehooksv1.CanUpdateMachineResponse) {
 	log := ctrl.LoggerFrom(ctx)
+	if req.Current.Machine.Name != "" {
+		live := &clusterv1.Machine{}
+		if h.reader.Get(ctx, client.ObjectKeyFromObject(&req.Current.Machine), live) == nil {
+			if err := h.consumeMachineReceipt(ctx, live); err != nil {
+				respondFailure(&resp.CommonResponse, "previous operation cleanup incomplete", err, log)
+				return
+			}
+		}
+	}
 
 	machinePatch, err := patchBetween(req.Current.Machine, req.Desired.Machine, machinePaths)
 	if err != nil {
@@ -61,6 +72,10 @@ func (h *Handler) DoCanUpdateMachine(ctx context.Context, req *runtimehooksv1.Ca
 // spec.template.spec rather than spec.
 func (h *Handler) DoCanUpdateMachineSet(ctx context.Context, req *runtimehooksv1.CanUpdateMachineSetRequest, resp *runtimehooksv1.CanUpdateMachineSetResponse) {
 	log := ctrl.LoggerFrom(ctx)
+	if err := h.consumeMachineSetReceipts(ctx, req.Current.MachineSet.Namespace, req.Current.MachineSet.Name); err != nil {
+		respondFailure(&resp.CommonResponse, "previous operation cleanup incomplete", err, log)
+		return
+	}
 
 	machineSetPatch, err := patchBetween(req.Current.MachineSet, req.Desired.MachineSet, prefixPaths(templateSpecPrefix, machinePaths))
 	if err != nil {

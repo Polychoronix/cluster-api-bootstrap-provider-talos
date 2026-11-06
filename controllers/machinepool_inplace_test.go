@@ -68,11 +68,11 @@ type nodeRecorder struct {
 }
 
 func (n *nodeRecorder) factory() inplace.NodeClientFactory {
-	return func(_ context.Context, _ types.NamespacedName, endpoints []string) (inplace.NodeClient, error) {
+	return func(_ context.Context, _ types.NamespacedName, endpointSpec bootstrapv1beta1.TalosEndpoint) (inplace.NodeClient, error) {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 
-		endpoint := endpoints[0]
+		endpoint := endpointSpec.ServerName
 
 		if err := n.connectErr[endpoint]; err != nil {
 			return nil, err
@@ -232,6 +232,7 @@ func newFixture(t *testing.T, opts fixtureOptions) *fixture {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ownerName,
 			Namespace: testNamespace,
+			UID:       "config-uid",
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: capiv1.GroupVersion.String(),
 				Kind:       opts.ownerKind,
@@ -281,6 +282,7 @@ func newFixture(t *testing.T, opts fixtureOptions) *fixture {
 
 	f.reconciler = &TalosConfigReconciler{
 		Client:                    c,
+		APIReader:                 c,
 		Log:                       ctrl.Log.WithName("test"),
 		Scheme:                    scheme,
 		MachinePoolInPlaceUpdates: opts.enabled,

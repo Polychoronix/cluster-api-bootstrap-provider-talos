@@ -15,9 +15,9 @@ Talos, so these changes can instead be applied to the running machine.
 |---|---|---|
 | `TalosConfig.spec.configPatches` / `strategicPatches` / `data` / `hostname` | yes | config regenerated, applied with `ApplyConfiguration` in `AUTO` mode — Talos decides whether a reboot is needed |
 | `TalosConfig.spec.talosVersion` | yes | as above; changes the config contract used for generation |
-| `TalosConfig.spec.imageFactory` | yes | config regenerated with the new installer image (an `UnattendedInstallConfig` document from Talos 1.14, `machine.install.image` before); the node is upgraded only if the image tag names a Talos version it is not already running |
-| `Machine.spec.version` (Kubernetes) | yes | the version feeds the control plane component and kubelet images in the machine config |
-| Talos OS version (installer image) | yes | Talos 1.13+: lifecycle service (pull, install, reboot), driven in the background and reported on each hook call; older nodes: the machine service `Upgrade`. Talos cordons and drains the node itself on reboot |
+| `TalosConfig.spec.imageFactory` | yes | requested full image identity changes (reference/digest/schematic/extensions) upgrade even at the same OS version; unchanged historical image intent does not enforce OS drift |
+| `Machine.spec.version` (Kubernetes) | yes | generated configs receive target component versions; baseline-backed configs require reviewed patches matching the requested target |
+| Talos OS installer identity | current observation contract: 1.14 | durable pull/install/reboot acknowledgment and observed recovery; older capability support remains unresolved until equivalent observations are implemented and tested |
 | `TalosConfig.spec.generateType` | **no** | a worker↔control plane role flip cannot be applied to a running node |
 | InfrastructureMachine spec, by default | **no** | falls back to a rolling replacement |
 | TinkerbellMachine template / affinity / ISO URL | yes | see below |
@@ -50,6 +50,79 @@ CAPT also power cycles a machine through Rufio if an in-place update stalls. Onc
 commits to the in-place path there is no fallback to replacement, so a node that never
 returns from an upgrade reboot would otherwise hang. One hard power cycle is attempted, after
 which the update is left failed for an operator to inspect.
+
+## Unified native-node management
+
+The `v0.9.0-craci.3` fork uses one flow for every CAPI-created node:
+bootstrap when needed, observe the running node, activate with explicit consent,
+then execute requested updates. Standalone `Machine` objects, MachineSet workers
+and TalosControlPlane children use the same observer and private activation state.
+Hand-installed nodes are replaced through the infrastructure provider, not adopted.
+
+```yaml
+spec:
+  generateType: worker
+  manage: true
+  talosEndpoint:
+    address: talos-egress.example:50000
+    serverName: worker.example.ts.net
+```
+
+`manage` defaults to `false`: observation is allowed, but Talos configuration/OS
+mutations are not. Set it on a concrete TalosConfig or its template; a TCP's own
+`spec.manage` propagates to its newly created children. Both served API versions
+preserve true and false edits through conversion, with or without conversion data.
+There are no mode, inventory-revision, approval-token or duplicated management-status
+fields. `ActivationReady` is a standard condition, distinct from bootstrap readiness.
+
+A standalone Machine's original seed needs no owner-kind receipt. CABPT writes the
+normal immutable seed once; after core copies its name into the Machine, subsequent
+requested render output is separate. Activation never rewrites that original seed.
+Neither the old `acceptedIntent` field nor creation-origin marker annotations exist.
+
+Activation requires the exact live Machine, TalosConfig, InfraMachine and workload
+Node UID associations, providerID, settled Machine controller ownership and a real
+CABPT-owned original seed. The uncached observer renders the current namespace-local
+inputs, compares every Talos document to active configuration and verifies imported
+Talos CA trust. Actual kubelet-image and matching Node/Talos boot-ID witnesses are
+mandatory. Missing identity, private inputs or witnesses fail closed.
+
+Native generation can consume the cluster's existing `<cluster>-talos` bundle;
+a full `configSecretRef` baseline is optional, not an adoption prerequisite.
+Ordered Secret-backed patches remain private. A generation source binds complete
+Secret data; a key reference binds that key. No private bytes or fingerprints are
+published in CR status, annotations or errors.
+
+TCP activation is aggregate: the complete currently owned CAPI Machine inventory,
+all observed control-plane Nodes and healthy voting etcd members must agree. Foreign,
+unaccounted, duplicate or learner membership cannot authorize lifecycle work. The
+shared desired configuration is rendered with each native child's own Talos transport.
+Per-Machine UID override/owner-transfer machinery is removed; no observer adopts or
+creates Machines, changes existing owners or fabricates infrastructure status.
+
+Once activated, current requested policy changes use the same renderer and journaled
+executor without a second approval ceremony. Each activation snapshot is immutable and
+UID-bound; accepted image state advances privately only after all operation steps have
+actual completion witnesses. When a later verified observation differs from the
+activated snapshot only in node lifecycle (a reset member's new boot ID, Node UID or
+etcd member ID, its live configuration and versions), etcd membership or re-verified
+intent, a new immutable snapshot replaces it and keeps the activation and accepted
+images. Identity-class differences (authority, Cluster identity and inputs, cluster
+credentials, member inventory and associations, the CAs and discovery identity in a
+member's live configuration) keep the record fail-closed with
+`activated safety snapshot changed failed: <what changed>`. Completion receipts still
+fence CAPI/core/owner cleanup. They are operation receipts, never bootstrap-seed receipts.
+
+Readiness loss during an issued reboot remains a recovery wait on the same Node UID,
+not permission to reissue. New disruptive work requires fresh health checks. Pauses
+stop observation, activation and mutation; a malformed/recreated private activation
+record never selects a seed-based fallback. Native deleting-owner cleanup retains its
+separate UID-bound idle-operation and consumed-receipt checks.
+
+Ordinary initial provisioning remains possible before activation. CACPPT never calls
+Talos Bootstrap when the owning Cluster is already control-plane initialized; fresh
+Bootstrap inspection and its RPC share a 30-second deadline. Existing-node replacement
+and the manual Ceph health gate remain operator-controlled deployment steps.
 
 ## Enabling it
 
@@ -116,15 +189,94 @@ serving certificate and **the manager exits at startup if it is missing**. Equal
    means in-place, anything left over means a rollout.
 3. On a match the owner stamps `update-in-progress` on the Machine, InfraMachine and
    TalosConfig, writes the desired specs, and marks `UpdateMachine` pending.
-4. CABPT's webhook admits the TalosConfig spec change because of that annotation, and
-   regenerates the bootstrap data secret, stamping a hash of the inputs on it.
-5. The core Machine controller polls `UpdateMachine`. The extension waits for that hash to
-   match the desired spec — otherwise it would apply the pre-update config and wrongly report
-   success — then applies the config and, if the installer image changed, upgrades Talos.
-6. When the extension reports completion, Cluster API clears the annotations.
+4. CABPT's webhook admits the TalosConfig spec change because of that annotation.
+   The shared resolver/renderer regenerates its output Secret and stores resolved
+   input freshness privately in Secret data, including desired UID/generation and
+   referenced Secret identities. A same-name Secret rotation needs a requested
+   shared or Machine `configRevision`; rotation alone does not apply live drift.
+5. The core Machine controller polls `UpdateMachine`. The extension uses uncached
+   Machine/TC/Infra/source observations and stores a private, UID-bound operation
+   journal before every mutating RPC. A manager-owned bounded runner outlives the
+   hook HTTP request; concurrent polls never reissue an `Issued` operation. Each
+   `UpdateMachine` evaluation also runs detached from the hook request (handler
+   timeout 30s, evaluation bounded at 3 minutes), one per Machine: later calls join
+   it, and a call whose request ends first is asked to call again. Completion writes
+   compare-and-swap against a fresh uncached read of the journal. Unknown
+   responses, lost durable acknowledgments, changed inputs/identities or expired
+   recovery deadlines after a step was issued stop for intervention rather than
+   retry or replacement. A journal none of whose steps was issued (every step still
+   `Planned`) has had no effect on the node: any failure before issuance discards
+   it and the next poll plans afresh from current inputs. Journals left `Ambiguous`
+   with only `Planned` steps by earlier releases are discarded the same way.
+   An unreachable workload API (timeout, transport, API status other than NotFound;
+   per request `--workload-api-timeout`, default 15s) is never a changed identity:
+   the hook answers "waiting for the workload API" and the issuing runner's guard
+   retries until the step deadline. Only a Node that is gone or carries another
+   UID/providerID is `activated workload Node identity changed`.
+   An `Ambiguous` journal whose Apply step was issued is settled by observation on
+   each later poll, once no runner can still act on it (an unacknowledged step only
+   after its deadline) and after the pause and identity guards: the node running the
+   requested configuration (compared document by document, order-insensitive)
+   completes the journal as `Observed` with its receipt once the normal recovery
+   witnesses hold, the Apply outcome taken from the boot witness when it was never
+   acknowledged; a never-acknowledged Apply whose node still runs the configuration
+   recorded when the operation was planned never landed and is discarded and
+   re-planned. Anything else (neither configuration, an acknowledged apply on the
+   pre-apply configuration, a later step with an unknown outcome, an unobservable
+   node) stays `Ambiguous` and the error names why. Journals planned before craci.12
+   carry no pre-apply record, so only the landed outcome settles them.
+6. Apply acknowledgment is not completion: verify actual active full configuration,
+   target OS/kubelet versions, preserved Node UID/providerID and Node Ready. A chosen
+   reboot additionally requires a changed kernel BootID. Installer updates bind a
+   materialized digest-qualified containerd key, explicit install exit zero and
+   actual boot/OS/schematic/extension recovery. Control-plane completion also needs
+   fresh complete expected voting membership, consistent etcd IDs/views/leader and
+   Kubernetes `/readyz`, not only a later owner preflight.
+   CP journals preserve original member IDs/hostnames/peer and client URLs and
+   require exact recovery; leader/raft progression is observed but not frozen.
+7. A matching private Observed receipt is emitted only after accepted image intent
+   is durable. Core then clears its update/pending annotations. Exact cleanup
+   consumes—but does not delete—the receipt; the next requested transaction can
+   start on the same Machine while retaining the previous receipt. No manual
+   journal edits or physical provisioning are part of this handshake.
 
 Control plane machines are updated **one at a time**, and only while etcd is healthy across
 the whole control plane, because an in-place upgrade reboots the node.
+
+Finalization rechecks uncached objects/owners/sources after recovery and requires
+the exact frozen output UID, configuration and private freshness before advancing
+accepted intent or publishing a receipt. Source changes after issuance stop for
+intervention; initial or consumed next-generation rendering waits safely.
+
+### Clearing a genuinely ambiguous transaction
+
+`UpdateMachine` answering `operation outcome ambiguous; intervention required: <reason>`
+(or `operation step ambiguous`) means a step reached the node and observation could
+not settle its outcome (step 5 above; the reason says why, and the controller logs
+`ambiguous in-place operation settlement` once per outcome). First establish what the
+node actually runs (`talosctl get mc`, `talosctl version`, Node Ready, etcd membership
+for a control plane) and decide whether the change landed. Then, with the owning
+TalosControlPlane (or Machine) paused
+via `cluster.x-k8s.io/paused`, clear the transaction in this order (namespace of the
+Machine; `<tc>` is the Machine's TalosConfig, `<infra>` its InfraMachine):
+
+```sh
+# 1. Inspect the journal: phase and step phases; keep it if phase is Observed.
+kubectl -n <ns> get secret <tc>-update-operation -o jsonpath='{.data.journal}' | base64 -d | jq '{phase,transactionID,steps:[.steps[]|{kind,phase}]}'
+# 2. Core and owner markers on the Machine, TalosConfig and InfraMachine.
+kubectl -n <ns> annotate machine <machine> in-place-updates.internal.cluster.x-k8s.io/update-in-progress- runtime.cluster.x-k8s.io/pending-hooks-
+kubectl -n <ns> annotate talosconfig <tc> in-place-updates.internal.cluster.x-k8s.io/update-in-progress- bootstrap.cluster.x-k8s.io/update-plan-secret- bootstrap.cluster.x-k8s.io/update-plan-uid-
+kubectl -n <ns> annotate <infra-kind> <infra> in-place-updates.internal.cluster.x-k8s.io/update-in-progress-
+# 3. The ambiguous journal (only when its transactionID is the stuck one).
+kubectl -n <ns> delete secret <tc>-update-operation
+# 4. The owner plan of a TalosControlPlane (CACPPT): tcp-<tcp UID>-inplace.
+kubectl -n <ns> delete secret tcp-$(kubectl -n <ns> get tcp <tcp> -o jsonpath='{.metadata.uid}')-inplace
+```
+
+Unpause afterwards. The TalosConfig keeps the desired spec the owner wrote; if the
+node did not converge, `ConfigDrift` keeps the Machine outdated and the owner plans a
+new transaction. Never clear a journal with a step `Issued` while its deadline has not
+passed: the bounded runner may still be applying it.
 
 ## Limitations
 
@@ -132,8 +284,26 @@ the whole control plane, because an in-place upgrade reboots the node.
 - Rotating an infrastructure template still rolls control plane machines: a new InfraMachine
   is required, and this provider only produces one by creating a replacement.
 - MachinePools are handled separately, by CABPT itself — see below.
-- The Talos API interactions are covered by unit tests against a fake client. They have not
-  been validated against real hardware — do that before relying on this in production.
+- Running Talos resources do not expose the booted installer's OCI digest. Completion
+  proves pinned pull + durable explicit install success + actual reboot/version/
+  schematic/extensions/config/Node recovery; it never invents a running digest.
+  Losing the install acknowledgment is ambiguous even when the version matches.
+- The complete implemented observation path is verified against Talos 1.14.
+  Talos 1.13 has Lifecycle install acknowledgments but lacks the newer BootID,
+  kubelet-status and schematic resources used here. Source-supported fixed kernel
+  boot-ID Read, actual kubelet container inspection and virtual schematic metadata
+  may supply older equivalents; they are not implemented/tested support yet.
+- Legacy OS updates (<1.13) remain an unresolved release compatibility gate. The
+  current path rejects before operations; no durable equivalent is implemented.
+  Correlated successful upgrade task evidence could be investigated if legacy
+  support is selected, but MachineReady/request acceptance alone is insufficient.
+- Native bootstrap supports generated and full Secret-backed configurations.
+  Existing original seeds remain immutable; node updates require UID-bound live
+  observation and explicit `manage` consent, not accepted-seed lineage receipts
+  or an adoption approval API.
+- Real isolated CAPI core/runtime TLS and Talos mTLS/COSI/Lifecycle tests accompany
+  the unit regressions. They use a controlled external node server, not hardware;
+  live Robot replacement/disruption and real Service DNS/dataplane remain user-run.
 
 ## MachinePools
 
